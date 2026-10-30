@@ -1,3 +1,4 @@
+#include "soft_stats.h"
 #include <string.h>
 
 #include "../OpenGL.h"
@@ -44,6 +45,7 @@ void soft_present(void)
 {
    static bool logged;
    int i;
+   SOFT_TIME_BEGIN(t0);
 
    for (i = 0; i < SOFT_WIDTH * SOFT_HEIGHT; i++)
    {
@@ -51,6 +53,7 @@ void soft_present(void)
       uint32_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
       soft_front[i] = ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
    }
+   SOFT_TIME_END(SOFT_T_PRESENT, t0);
    if (!logged && log_cb)
       log_cb(RETRO_LOG_INFO, "soft: first frame presented\n");
    logged = true;
@@ -133,7 +136,7 @@ static void soft_log(const char *msg)
 }
 
 /* Chooses span and per-draw state from RDP other modes and the combiner. */
-static void soft_build_pipe(SoftPipe *p, bool *textured)
+static void build_pipe(SoftPipe *p, bool *textured)
 {
    bool zbuf;
    static bool logger_set;
@@ -194,6 +197,13 @@ static uint8_t soft_vertex_fog(const struct SPVertex *v)
       zw = -1.0f;
    f = zw * ((float)gSP.fog.multiplier / 256.0f) + (float)gSP.fog.offset / 255.0f;
    return soft_u8(f);
+}
+
+static void soft_build_pipe(SoftPipe *p, bool *textured)
+{
+   SOFT_TIME_BEGIN(t0);
+   build_pipe(p, textured);
+   SOFT_TIME_END(SOFT_T_PIPE, t0);
 }
 
 static void soft_draw_list(const uint8_t *elements, uint32_t count)

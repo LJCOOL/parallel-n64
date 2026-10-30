@@ -1,3 +1,4 @@
+#include "soft_stats.h"
 #include <retro_miscellaneous.h>
 
 #include "../Common.h"
@@ -147,7 +148,7 @@ static void store(SoftTex *tex, int j, uint32_t c)
 }
 
 /* Mirrors TextureCache_getTextureDestData, writing RGB565 + A8 planes. */
-static void decode_tile(void *opaque, SoftTex *tex)
+static void decode_tile_impl(void *opaque, SoftTex *tex)
 {
    struct DecodeCtx *ctx = (struct DecodeCtx*)opaque;
    struct gDPTile *tile = ctx->tile;
@@ -249,6 +250,13 @@ static void decode_tile(void *opaque, SoftTex *tex)
    }
 }
 
+static void decode_tile(void *opaque, SoftTex *tex)
+{
+   SOFT_TIME_BEGIN(t0);
+   decode_tile_impl(opaque, tex);
+   SOFT_TIME_END(SOFT_T_DECODE, t0);
+}
+
 const SoftTex *soft_texcache_get(uint32_t t)
 {
    struct DecodeCtx ctx;
@@ -266,7 +274,11 @@ const SoftTex *soft_texcache_get(uint32_t t)
          || ctx.sizes.realWidth > 1024 || ctx.sizes.realHeight > 1024)
       return NULL;
 
-   key.crc     = tile_crc(ctx.tile, &ctx.sizes);
+   {
+      SOFT_TIME_BEGIN(t0);
+      key.crc  = tile_crc(ctx.tile, &ctx.sizes);
+      SOFT_TIME_END(SOFT_T_TEXCRC, t0);
+   }
    key.address = gDP.textureImage.address;
    key.w       = (uint16_t)ctx.sizes.realWidth;
    key.h       = (uint16_t)ctx.sizes.realHeight;
