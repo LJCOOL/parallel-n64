@@ -14,6 +14,7 @@ enum gfx_plugin_type
    GFX_PARALLEL,
    GFX_GLIDEN64,
    GFX_NULL,
+   GFX_SOFT,
 };
 
 enum fork_rsp_plugin_type

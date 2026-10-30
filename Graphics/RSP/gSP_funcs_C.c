@@ -11,6 +11,7 @@ void GSPCombineMatricesC(void)
          glide64gSPCombineMatrices();
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPCombineMatrices();
@@ -37,6 +38,7 @@ void GSPClipVertexC(uint32_t v)
          glide64gSPClipVertex(v);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPClipVertex(v);
@@ -68,6 +70,7 @@ void GSPLookAtC(uint32_t l, uint32_t n)
          glide64gSPLookAt(l, n);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPLookAt(l, n);
@@ -99,6 +102,7 @@ void GSPLightC(uint32_t l, int32_t n)
          glide64gSPLight(l, n);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPLight(l, n);
@@ -137,6 +141,7 @@ void GSPLightColorC(uint32_t lightNum, uint32_t packedColor )
          glide64gSPLightColor(lightNum, packedColor);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPLightColor(lightNum, packedColor);
@@ -168,6 +173,7 @@ void GSPViewportC(uint32_t v)
          glide64gSPViewport(v);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPViewport(v);
@@ -194,6 +200,7 @@ void GSPForceMatrixC(uint32_t mptr)
          glide64gSPForceMatrix(mptr);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gSPForceMatrix(mptr);

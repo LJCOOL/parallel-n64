@@ -92,6 +92,8 @@ bool glsm_ctl(enum glsm_state_ctl state, void *data) { return false; }
 int InitGfx(void);
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
 int glide64InitGfx(void);
+#endif
+#ifdef HAVE_GLN64
 void gles2n64_reset(void);
 #endif
 #if defined(HAVE_RICE)
@@ -134,6 +136,10 @@ retro_get_cpu_features_t perf_get_cpu_features_cb = NULL;
 
 retro_log_printf_t log_cb                         = NULL;
 retro_video_refresh_t video_cb                    = NULL;
+
+#ifdef HAVE_SOFT
+#include "../gles2n64/src/soft/soft_backend.h"
+#endif
 retro_input_poll_t poll_cb                        = NULL;
 retro_input_state_t input_cb                      = NULL;
 retro_audio_sample_batch_t audio_batch_cb         = NULL;
@@ -543,6 +549,10 @@ static void core_settings_set_defaults(void)
 #endif
       if(gfx_var.value && !strcmp(gfx_var.value, "null"))
          gfx_plugin = GFX_NULL;
+#ifdef HAVE_SOFT
+      if(gfx_var.value && !strcmp(gfx_var.value, "soft"))
+         gfx_plugin = GFX_SOFT;
+#endif
 #ifdef HAVE_THR_AL
 	  if(gfx_var.value && !strcmp(gfx_var.value, "angrylion"))
          gfx_plugin = GFX_ANGRYLION;
@@ -1055,6 +1065,12 @@ static void present_frame(void)
 #endif
             break;
 
+#ifdef HAVE_SOFT
+         case GFX_SOFT:
+            video_cb(soft_frame(), SOFT_WIDTH, SOFT_HEIGHT, SOFT_WIDTH * 2);
+            break;
+#endif
+
          case GFX_PARALLEL:
 #if defined(HAVE_PARALLEL)
             parallel_profile_video_refresh_begin();
@@ -1206,6 +1222,7 @@ static void emu_step_initialize(void)
    {
       case GFX_ANGRYLION: current_rdp_type = RDP_PLUGIN_ANGRYLION; break;
       case GFX_NULL:      current_rdp_type = RDP_PLUGIN_NULL;      break;
+      case GFX_SOFT:      current_rdp_type = RDP_PLUGIN_SOFT;      break;
       case GFX_PARALLEL:  current_rdp_type = RDP_PLUGIN_PARALLEL;  break;
       case GFX_GLIDEN64:  current_rdp_type = RDP_PLUGIN_GLIDEN64;  break;
       case GFX_RICE:      current_rdp_type = RDP_PLUGIN_RICE;      break;
@@ -1256,6 +1273,7 @@ void reinit_gfx_plugin(void)
           glide64InitGfx();
 #endif
           break;
+       case GFX_SOFT:
        case GFX_GLN64:
 #ifdef HAVE_GLN64
           gles2n64_reset();
@@ -1305,6 +1323,7 @@ void deinit_gfx_plugin(void)
           break;
        case GFX_ANGRYLION:
        case GFX_NULL:
+       case GFX_SOFT:
           break;
        default:
           /* All GL renderers (gln64 / gliden64 / glide64 / rice) bring up the
@@ -1492,6 +1511,7 @@ static void context_reset(void)
    {
       case GFX_ANGRYLION:
       case GFX_NULL:
+      case GFX_SOFT:
       case GFX_PARALLEL:
          break;
       default:
@@ -2406,6 +2426,13 @@ void update_variables(bool startup)
          screen_width = 640;
          screen_height = 480;
       }
+#ifdef HAVE_SOFT
+      if (gfx_plugin == GFX_SOFT)
+      {
+         screen_width  = SOFT_WIDTH;
+         screen_height = SOFT_HEIGHT;
+      }
+#endif
    }
    else
    {
@@ -2443,6 +2470,14 @@ void update_variables(bool startup)
 #endif
          if(!strcmp(var.value, "null"))
             gfx_plugin = GFX_NULL;
+#ifdef HAVE_SOFT
+         if(!strcmp(var.value, "soft"))
+         {
+            gfx_plugin    = GFX_SOFT;
+            screen_width  = SOFT_WIDTH;
+            screen_height = SOFT_HEIGHT;
+         }
+#endif
 #ifdef HAVE_THR_AL
          if(!strcmp(var.value, "angrylion"))
             gfx_plugin = GFX_ANGRYLION;
@@ -3492,7 +3527,7 @@ bool retro_load_game(const struct retro_game_info *game)
 
    init_audio_libretro();
 
-   if (gfx_plugin != GFX_NULL
+   if (gfx_plugin != GFX_NULL && gfx_plugin != GFX_SOFT
 #ifdef HAVE_THR_AL
        && gfx_plugin != GFX_ANGRYLION
 #endif
@@ -3922,6 +3957,11 @@ void retro_run (void)
             break;
       }
    }
+
+#ifdef HAVE_SOFT
+   if (gfx_plugin == GFX_SOFT)
+      soft_stats_frame();
+#endif
 
    emu_step_render();
 

@@ -3,7 +3,11 @@
 
 #include <retro_inline.h>
 
+#ifdef HAVE_SOFT
+#include "soft/gl_compat.h"
+#else
 #include <glsm/glsmsym.h>
+#endif
 
 #include "convert.h"
 

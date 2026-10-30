@@ -14,7 +14,11 @@ VIDEODIR_GLIDEN64  = $(ROOT_DIR)/mupen64plus-video-gliden64
 
 
 ifeq ($(HAVE_OPENGL),0)
+ifeq ($(HAVE_SOFT),1)
+	HAVE_GLN64    =1
+else
 	HAVE_GLN64    =0
+endif
 	HAVE_GLIDE64  =0
 	HAVE_GLIDEN64 =0
 	HAVE_RICE     =0
@@ -550,6 +554,13 @@ SOURCES_C += $(VIDEODIR_GLN64)/3DMath.c \
             $(VIDEODIR_GLN64)/Turbo3D.c \
             $(VIDEODIR_GLN64)/ZSort.c \
             $(VIDEODIR_GLN64)/VI.c
+
+ifeq ($(HAVE_SOFT),1)
+CFLAGS   += -DHAVE_SOFT
+CXXFLAGS += -DHAVE_SOFT
+SOURCES_C := $(filter-out $(addprefix $(VIDEODIR_GLN64)/,OpenGL.c Textures.c ShaderCombiner.c FrameBuffer_gles2n64.c DepthBuffer.c),$(SOURCES_C))
+SOURCES_C += $(wildcard $(VIDEODIR_GLN64)/soft/*.c)
+endif
 endif
 
 ifeq ($(HAVE_NEON),1)
