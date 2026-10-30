@@ -99,9 +99,9 @@ static inline void eval_generic(const GenericPlan *g, uint8_t *v, int *c)
       c[ch] = v[R_COMB * 4 + ch];
 }
 
-/* Integer span: 16.16 colour, texture and depth steps, mode chosen per span. */
-void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
-      const SoftTri *tri, int y, int x0, int x1)
+/* Integer span: 16.16 colour, texture and depth steps; inlined once per constant mode. */
+static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
+      const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int mode)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
    const SoftTex *tex = p->tex;
@@ -117,7 +117,7 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
    int64_t z = (int64_t)floor((double)at(&tri->z, fx, fy) * 65536.0);
    int64_t dz = (int64_t)floor((double)tri->z.dx * 65536.0);
    int32_t s = 0, tt = 0, ds = 0, dt = 0, seg_s = 0, seg_t = 0;
-   int bias = p->decal ? SOFT_DECAL_BIAS : 0, mode = prog->mode, uses_tex = prog->uses_tex;
+   int bias = p->decal ? SOFT_DECAL_BIAS : 0, uses_tex = prog->uses_tex;
    int pow2 = 0, ms = 0, mt = 0, x, ch;
    /* Rows whose depth stays in [0, 65536) step unsigned 32-bit; others need 64-bit. */
    int64_t z_end = z + dz * (x1 - x0 - 1);
@@ -136,9 +136,8 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       ms = tex->w - 1;
       mt = tex->h - 1;
    }
-   if (mode == SC_GENERIC || mode == SC_LERP_ENV_PRIM)
+   if (mode == SC_GENERIC)
    {
-      mode = SC_GENERIC;
       plan_generic(prog, &plan);
       memset(v, 0, sizeof(v));
       for (ch = 0; ch < 4; ch++)
@@ -247,5 +246,19 @@ next:
       else
          z += dz;
       s += ds; tt += dt;
+   }
+}
+
+void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
+      const SoftTri *tri, int y, int x0, int x1)
+{
+   switch (((const SoftCombineProgram*)p->prog)->mode)
+   {
+      case SC_SHADE:         span_mode(t, p, tri, y, x0, x1, SC_SHADE); break;
+      case SC_TEX:           span_mode(t, p, tri, y, x0, x1, SC_TEX); break;
+      case SC_TEX_MUL_SHADE: span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_SHADE); break;
+      case SC_TEX_MUL_PRIM:  span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_PRIM); break;
+      case SC_TEX_MUL_ENV:   span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_ENV); break;
+      default:               span_mode(t, p, tri, y, x0, x1, SC_GENERIC); break;
    }
 }
