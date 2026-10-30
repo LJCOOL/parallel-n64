@@ -85,11 +85,24 @@ static int match(const struct CombineCycle *c, SoftCombineMode mode)
    }
 }
 
-static SoftCombineMode classify(const DecodedMux *m, int two_cycle, int log)
+static SoftAlphaMode match_alpha(const struct CombineCycle *c)
+{
+   if (is_single(c, SHADE))                  return SA_SHADE;
+   if (is_single(c, ENVIRONMENT))            return SA_ENV;
+   if (is_single(c, PRIMITIVE))              return SA_PRIM;
+   if (is_single(c, TEXEL0))                 return SA_TEX;
+   if (is_product(c, TEXEL0, SHADE))         return SA_TEX_MUL_SHADE;
+   if (is_product(c, TEXEL0, ENVIRONMENT))   return SA_TEX_MUL_ENV;
+   if (is_product(c, TEXEL0, PRIMITIVE))     return SA_TEX_MUL_PRIM;
+   return SA_COUNT;
+}
+
+static SoftCombineMode classify(const DecodedMux *m, int two_cycle, int log, SoftAlphaMode *amode)
 {
    int i, n = two_cycle ? 4 : 2;
    SoftCombineMode mode;
 
+   *amode = SA_SAME;
    for (i = 0; i < n; i++)
    {
       const struct CombineCycle *c = &m->decode[i];
@@ -105,12 +118,24 @@ static SoftCombineMode classify(const DecodedMux *m, int two_cycle, int log)
    for (mode = SC_SHADE; mode < SC_GENERIC; mode++)
       if (match(&m->decode[0], mode) && match(&m->decode[1], mode))
          return mode;
+   /* Fast colour with a different simple alpha source. */
+   for (mode = SC_SHADE; mode <= SC_TEX_MUL_ENV; mode++)
+      if (match(&m->decode[0], mode))
+      {
+         SoftAlphaMode a = match_alpha(&m->decode[1]);
+         if (a != SA_COUNT)
+         {
+            *amode = a;
+            return mode;
+         }
+      }
    return SC_GENERIC;
 }
 
 SoftCombineMode soft_combine_classify(const DecodedMux *m)
 {
-   return classify(m, 0, 1);
+   SoftAlphaMode amode;
+   return classify(m, 0, 1, &amode);
 }
 
 static int uses(const SoftCombineProgram *p, int a, int b)
@@ -140,8 +165,8 @@ void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram
          out->sel[cy][k][2] = (uint8_t)c->m;
          out->sel[cy][k][3] = (uint8_t)c->a;
       }
-   out->mode = classify(m, two_cycle, 1);
-   if (out->mode == SC_TEX_MUL_SHADE)
+   out->mode = classify(m, two_cycle, 1, &out->amode);
+   if (out->mode == SC_TEX_MUL_SHADE && out->amode == SA_SAME)
    {
       /* Fallback also covers unsupported muxes, so pin the selectors. */
       out->cycles = 1;
@@ -210,7 +235,7 @@ static uint32_t pack4(const uint8_t *x)
    return x[0] | (x[1] << 8) | (x[2] << 16) | ((uint32_t)x[3] << 24);
 }
 
-uint32_t soft_combine_eval(const SoftCombineInputs *in)
+static uint32_t eval_colour(const SoftCombineInputs *in)
 {
    switch (in->prog->mode)
    {
@@ -221,6 +246,30 @@ uint32_t soft_combine_eval(const SoftCombineInputs *in)
       case SC_TEX_MUL_ENV:   return mul4(in->tex0, in->env);
       default:               return soft_combine_generic(in);
    }
+}
+
+/* Alpha for a split program, rounding products like the fast colour path. */
+static uint32_t eval_alpha(const SoftCombineInputs *in)
+{
+   const uint8_t *t = in->tex0;
+   switch (in->prog->amode)
+   {
+      case SA_SHADE:         return in->shade[3];
+      case SA_ENV:           return in->env[3];
+      case SA_PRIM:          return in->prim[3];
+      case SA_TEX:           return t[3];
+      case SA_TEX_MUL_SHADE: return (t[3] * in->shade[3] + 255) >> 8;
+      case SA_TEX_MUL_ENV:   return (t[3] * in->env[3] + 255) >> 8;
+      default:               return (t[3] * in->prim[3] + 255) >> 8;
+   }
+}
+
+uint32_t soft_combine_eval(const SoftCombineInputs *in)
+{
+   uint32_t c = eval_colour(in);
+   if (in->prog->mode == SC_GENERIC || in->prog->amode == SA_SAME)
+      return c;
+   return (c & 0x00ffffffu) | eval_alpha(in) << 24;
 }
 
 SoftBlendMode soft_blend_classify(uint32_t other_mode_l, int force_blend,

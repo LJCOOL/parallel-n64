@@ -83,6 +83,12 @@ static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_lim
       prog.sel[0][1][2] = SHADE;  prog.sel[0][1][3] = ZERO;
       if (prog.mode == SC_GENERIC)
          prog.uses_tex = 1;
+      if (prog.mode <= SC_TEX_MUL_ENV)
+      {
+         prog.amode = (SoftAlphaMode)((span / 7) % SA_COUNT);
+         if (prog.amode >= SA_TEX)
+            prog.uses_tex = 1;
+      }
       if (span & 16)
       {
          /* Two cycles with alpha-broadcast selectors and the combined feedback. */

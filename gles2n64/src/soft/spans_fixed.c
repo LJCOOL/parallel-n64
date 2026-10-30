@@ -101,7 +101,8 @@ static inline void eval_generic(const GenericPlan *g, uint8_t *v, int *c)
 
 /* Integer span: 16.16 colour, texture and depth steps; inlined once per constant mode. */
 static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
-      const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int mode)
+      const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int mode,
+      const int amode_const)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
    const SoftTex *tex = p->tex;
@@ -118,6 +119,8 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    int64_t dz = (int64_t)floor((double)tri->z.dx * 65536.0);
    int32_t s = 0, tt = 0, ds = 0, dt = 0, seg_s = 0, seg_t = 0;
    int bias = p->decal ? SOFT_DECAL_BIAS : 0, uses_tex = prog->uses_tex;
+   /* A negative amode_const reads the alpha mode at run time. */
+   const int amode = mode == SC_GENERIC ? SA_SAME : (amode_const < 0 ? (int)prog->amode : amode_const);
    int pow2 = 0, ms = 0, mt = 0, x, ch;
    /* Rows whose depth stays in [0, 65536) step unsigned 32-bit; others need 64-bit. */
    int64_t z_end = z + dz * (x1 - x0 - 1);
@@ -225,6 +228,18 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
             break;
       }
 
+      switch (amode)
+      {
+         case SA_SAME:          break;
+         case SA_SHADE:         c[3] = sh[3]; break;
+         case SA_ENV:           c[3] = p->env[3]; break;
+         case SA_PRIM:          c[3] = p->prim[3]; break;
+         case SA_TEX:           c[3] = tx[3]; break;
+         case SA_TEX_MUL_SHADE: c[3] = mul8(tx[3], sh[3]); break;
+         case SA_TEX_MUL_ENV:   c[3] = mul8(tx[3], p->env[3]); break;
+         default:               c[3] = mul8(tx[3], p->prim[3]); break;
+      }
+
       if (p->fog)
       {
          int fa = sat8(f);
@@ -254,13 +269,33 @@ next:
 void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       const SoftTri *tri, int y, int x0, int x1)
 {
-   switch (((const SoftCombineProgram*)p->prog)->mode)
+   const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
+   int key = prog->mode * SA_COUNT + prog->amode;
+
+   /* Dedicated loops for common colour and alpha pairs; others pick alpha per pixel. */
+#define PAIR(m, a) case (m) * SA_COUNT + (a): span_mode(t, p, tri, y, x0, x1, m, a); return
+   switch (key)
    {
-      case SC_SHADE:         span_mode(t, p, tri, y, x0, x1, SC_SHADE); break;
-      case SC_TEX:           span_mode(t, p, tri, y, x0, x1, SC_TEX); break;
-      case SC_TEX_MUL_SHADE: span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_SHADE); break;
-      case SC_TEX_MUL_PRIM:  span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_PRIM); break;
-      case SC_TEX_MUL_ENV:   span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_ENV); break;
-      default:               span_mode(t, p, tri, y, x0, x1, SC_GENERIC); break;
+      PAIR(SC_TEX_MUL_SHADE, SA_SAME);
+      PAIR(SC_TEX_MUL_SHADE, SA_SHADE);
+      PAIR(SC_TEX_MUL_SHADE, SA_ENV);
+      PAIR(SC_TEX_MUL_SHADE, SA_TEX);
+      PAIR(SC_TEX_MUL_SHADE, SA_TEX_MUL_ENV);
+      PAIR(SC_SHADE, SA_SAME);
+      PAIR(SC_SHADE, SA_ENV);
+      PAIR(SC_TEX, SA_SAME);
+      PAIR(SC_TEX, SA_SHADE);
+      PAIR(SC_TEX, SA_TEX_MUL_ENV);
+      default: break;
+   }
+#undef PAIR
+   switch (prog->mode)
+   {
+      case SC_SHADE:         span_mode(t, p, tri, y, x0, x1, SC_SHADE, -1); break;
+      case SC_TEX:           span_mode(t, p, tri, y, x0, x1, SC_TEX, -1); break;
+      case SC_TEX_MUL_SHADE: span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_SHADE, -1); break;
+      case SC_TEX_MUL_PRIM:  span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_PRIM, -1); break;
+      case SC_TEX_MUL_ENV:   span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_ENV, -1); break;
+      default:               span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME); break;
    }
 }
