@@ -23,7 +23,7 @@ typedef struct
  * Returns the polygon's vertex count: 0 (culled), 3 or 4. */
 int soft_clip_near(const struct SPVertex in[3], struct SPVertex out[SOFT_CLIP_MAX]);
 
-/* Right shift from colour-image pixels to the 160x120 target. */
+/* Right shift from colour-image pixels to the 320x240 target. */
 int soft_scale_shift(uint32_t color_image_width);
 
 /* Projects a clip-space vertex; false when it is at or behind the eye (w <= 0). */
