@@ -93,4 +93,96 @@ static inline void soft_pixel_finish(const SoftPipe *p, SoftCombineInputs *in,
       *zb = (uint16_t)zi;
 }
 
+static inline int wrap_texel(int i, int n, int mode)
+{
+   if (mode == SOFT_CLAMP)
+      return i < 0 ? 0 : (i >= n ? n - 1 : i);
+   if (!(n & (n - 1)))
+   {
+      if (mode == SOFT_MIRROR)
+      {
+         i &= 2 * n - 1;
+         return i >= n ? 2 * n - 1 - i : i;
+      }
+      return i & (n - 1);
+   }
+   if (mode == SOFT_MIRROR)
+   {
+      i %= 2 * n;
+      if (i < 0) i += 2 * n;
+      return i >= n ? 2 * n - 1 - i : i;
+   }
+   i %= n;
+   return i < 0 ? i + n : i;
+}
+
+static inline int mul8(int x, int y)
+{
+   return (x * y + 255) >> 8;
+}
+
+/* Same result as soft_pixel_finish for every mode except SC_GENERIC, with no calls. */
+static inline void soft_pixel_finish_fast(const SoftPipe *p, const SoftCombineInputs *in,
+      uint16_t *dst, uint16_t *zb, int zi, float r, float g, float b, float a, float f,
+      int si, int ti)
+{
+   int c[4], sh[4], tx[4] = { 0, 0, 0, 0 }, ch;
+   const uint8_t *k;
+
+   sh[0] = clamp8(r); sh[1] = clamp8(g); sh[2] = clamp8(b); sh[3] = clamp8(a);
+   if (in->prog->uses_tex)
+   {
+      const SoftTex *tex = p->tex;
+      int i = wrap_texel(ti, tex->h, tex->wrap_t) * tex->w + wrap_texel(si, tex->w, tex->wrap_s);
+      uint16_t texel = tex->rgb[i];
+      tx[0] = ((texel >> 11) & 0x1f) << 3 | ((texel >> 13) & 7);
+      tx[1] = ((texel >> 5) & 0x3f) << 2 | ((texel >> 9) & 3);
+      tx[2] = (texel & 0x1f) << 3 | ((texel >> 2) & 7);
+      tx[3] = tex->a[i];
+   }
+
+   switch (in->prog->mode)
+   {
+      case SC_SHADE:
+         for (ch = 0; ch < 4; ch++) c[ch] = sh[ch];
+         break;
+      case SC_TEX:
+         for (ch = 0; ch < 4; ch++) c[ch] = tx[ch];
+         break;
+      case SC_TEX_MUL_SHADE:
+         for (ch = 0; ch < 4; ch++) c[ch] = mul8(tx[ch], sh[ch]);
+         break;
+      default:
+         k = in->prog->mode == SC_TEX_MUL_PRIM ? in->prim : in->env;
+         for (ch = 0; ch < 4; ch++) c[ch] = mul8(tx[ch], k[ch]);
+         break;
+   }
+
+   if (p->fog)
+   {
+      int fa = clamp8(f);
+      for (ch = 0; ch < 3; ch++)
+      {
+         int fc = (p->fog_color >> (ch * 8)) & 0xff;
+         c[ch] += ((fc - c[ch]) * fa + 127) / 255;
+      }
+   }
+   if (p->alpha_test && c[3] < p->alpha_ref)
+      return;
+
+   if (p->blend == SB_OPAQUE)
+      *dst = pack565(c[0], c[1], c[2]);
+   else if (p->blend != SB_KEEP)
+   {
+      uint8_t d[3];
+      expand565(*dst, d);
+      for (ch = 0; ch < 3; ch++)
+         c[ch] = p->blend == SB_ADD_FOG_ALPHA ? d[ch] + c[ch] * c[3] / 255
+               : d[ch] + (c[ch] - d[ch]) * c[3] / 255;
+      *dst = pack565(c[0], c[1], c[2]);
+   }
+   if (p->z_test && p->z_update)
+      *zb = (uint16_t)zi;
+}
+
 #endif
