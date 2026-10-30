@@ -49,7 +49,7 @@ void soft_span_combine_neon(const SoftTarget *t, const SoftPipe *p,
    float32x4_t k = vld1q_f32(lane);
    const float32x4_t four = vdupq_n_f32(4.0f);
    SoftCombineInputs in;
-   int x;
+   int fast = prog->mode <= SC_TEX_MUL_ENV, x;
 
    soft_pixel_inputs(p, &in);
 
@@ -86,7 +86,12 @@ void soft_span_combine_neon(const SoftTarget *t, const SoftPipe *p,
       vst1q_f32(f, lerp4(f0, tri->f.dx, k));
 
       for (j = 0; j < n; j++)
-         if (live & (1 << j))
+         if (!(live & (1 << j)))
+            continue;
+         else if (fast)
+            soft_pixel_finish_fast(p, &in, &dst[x + j], &zb[x + j], zi[j],
+                  r[j], g[j], b[j], a[j], f[j], si[j], ti[j]);
+         else
             soft_pixel_finish(p, &in, &dst[x + j], &zb[x + j], zi[j],
                   r[j], g[j], b[j], a[j], f[j], si[j], ti[j]);
    }

@@ -76,6 +76,9 @@ static void test_neon_matches_scalar(void)
       if (prog.mode == SC_GENERIC)
          prog.uses_tex = 1;
 
+      tex.w = (span & 4) ? 24 : TW;
+      tex.h = (span & 8) ? 20 : TW;
+      tex.mask_s = tex.w - 1; tex.mask_t = tex.h - 1;
       tex.wrap_s = (uint8_t)(rnd() % 3);
       tex.wrap_t = (uint8_t)(rnd() % 3);
 
