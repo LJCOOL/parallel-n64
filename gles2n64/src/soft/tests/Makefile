@@ -1,7 +1,7 @@
 # Host unit tests for the soft renderer: `make` builds and runs every test_*.c.
 CC      ?= cc
 CFLAGS  ?= -O1 -std=c99 -Wall -I.. -I../../../../libretro-common/include
-SRCS    := ../raster.c ../soft_xform.c ../spans.c ../texcache.c
+SRCS    := ../raster.c ../soft_xform.c ../spans.c ../texcache.c ../combine.c
 TESTS   := $(patsubst %.c,%,$(wildcard test_*.c))
 BUILD   := build
 

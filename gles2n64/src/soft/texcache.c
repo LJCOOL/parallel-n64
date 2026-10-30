@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #include "texcache.h"
@@ -137,11 +138,29 @@ static int wrap_coord(int i, int n, int mode)
    }
 }
 
-uint16_t soft_tex_sample(const SoftTex *tex, int32_t s, int32_t t, uint8_t *alpha_out)
+static uint16_t sample_texel(const SoftTex *tex, int s, int t, uint8_t *alpha_out)
 {
-   int x = wrap_coord(s >> 16, tex->w, tex->wrap_s);
-   int y = wrap_coord(t >> 16, tex->h, tex->wrap_t);
+   int x = wrap_coord(s, tex->w, tex->wrap_s);
+   int y = wrap_coord(t, tex->h, tex->wrap_t);
    int i = y * tex->w + x;
    *alpha_out = tex->a[i];
    return tex->rgb[i];
+}
+
+uint16_t soft_tex_sample(const SoftTex *tex, int32_t s, int32_t t, uint8_t *alpha_out)
+{
+   return sample_texel(tex, s >> 16, t >> 16, alpha_out);
+}
+
+/* Keeps float to int conversion defined for any finite coordinate. */
+static int texel_index(float v)
+{
+   if (v > 1073741824.0f) return 1073741824;
+   if (v < -1073741824.0f) return -1073741824;
+   return (int)floorf(v);
+}
+
+uint16_t soft_tex_sample_f(const SoftTex *tex, float s, float t, uint8_t *alpha_out)
+{
+   return sample_texel(tex, texel_index(s), texel_index(t), alpha_out);
 }

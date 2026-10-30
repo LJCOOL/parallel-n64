@@ -49,8 +49,8 @@ static void soft_tri_setup(SoftTri *tri)
    grad(&tri->a, tri, a->a, b->a, c->a);
    grad(&tri->f, tri, a->fog, b->fog, c->fog);
    grad(&tri->w, tri, a->invw, b->invw, c->invw);
-   grad(&tri->sw, tri, a->s / 65536.0f * a->invw, b->s / 65536.0f * b->invw, c->s / 65536.0f * c->invw);
-   grad(&tri->tw, tri, a->t / 65536.0f * a->invw, b->t / 65536.0f * b->invw, c->t / 65536.0f * c->invw);
+   grad(&tri->sw, tri, a->s * a->invw, b->s * b->invw, c->s * c->invw);
+   grad(&tri->tw, tri, a->t * a->invw, b->t * b->invw, c->t * c->invw);
 }
 
 /* Edge a->b; top-left edges own their boundary pixels. */
