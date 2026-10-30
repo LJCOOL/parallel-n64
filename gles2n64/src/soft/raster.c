@@ -1,4 +1,5 @@
 #include "raster.h"
+#include "soft_stats.h"
 
 static int clampi(int v, int lo, int hi)
 {
@@ -46,6 +47,7 @@ static void soft_tri_setup(SoftTri *tri)
    grad(&tri->g, tri, a->g, b->g, c->g);
    grad(&tri->b, tri, a->b, b->b, c->b);
    grad(&tri->a, tri, a->a, b->a, c->a);
+   grad(&tri->f, tri, a->fog, b->fog, c->fog);
    grad(&tri->w, tri, a->invw, b->invw, c->invw);
    grad(&tri->sw, tri, a->s / 65536.0f * a->invw, b->s / 65536.0f * b->invw, c->s / 65536.0f * c->invw);
    grad(&tri->tw, tri, a->t / 65536.0f * a->invw, b->t / 65536.0f * b->invw, c->t / 65536.0f * c->invw);
@@ -119,6 +121,7 @@ void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
    tri.v[1] = v1;
    tri.v[2] = v2;
    soft_tri_setup(&tri);
+   soft_stats_count_tri();
 
    px = (int64_t)x0 * 16 + 8;
    py = (int64_t)y0 * 16 + 8;
@@ -146,7 +149,10 @@ void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
          w2 += e[2].step_x;
       }
       if (start >= 0)
+      {
          p->span(t, p, &tri, y, start, end);
+         soft_stats_count_px(end - start);
+      }
 
       e[0].value += e[0].step_y;
       e[1].value += e[1].step_y;
