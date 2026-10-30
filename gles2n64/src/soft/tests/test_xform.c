@@ -5,9 +5,9 @@
 
 static void test_scale_for_wide_color_image(void)
 {
-   CHECK(soft_scale_shift(320) == 1);
-   CHECK(soft_scale_shift(640) == 2);
-   CHECK(soft_scale_shift(256) == 1);
+   CHECK(soft_scale_shift(320) == 0);
+   CHECK(soft_scale_shift(640) == 1);
+   CHECK(soft_scale_shift(256) == 0);
 }
 
 static void test_center_vertex_maps_to_center(void)

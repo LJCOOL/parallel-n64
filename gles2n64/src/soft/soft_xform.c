@@ -5,7 +5,7 @@
 
 int soft_scale_shift(uint32_t color_image_width)
 {
-   return color_image_width > 320 ? 2 : 1;
+   return color_image_width > 320 ? 1 : 0;
 }
 
 static float clampf(float v, float lo, float hi)
