@@ -454,6 +454,11 @@ void plugin_connect_all()
       case RDP_PLUGIN_NULL:
           gfx = gfx_null;
           break;
+      case RDP_PLUGIN_SOFT:
+#ifdef HAVE_SOFT
+          gfx = gfx_gln64;
+#endif
+          break;
       case RDP_PLUGIN_NONE:
       default:
          break;

@@ -23,6 +23,7 @@ void GDPSetScissorC(uint32_t mode,
          glide64gDPSetScissor(mode, ulx, uly, lrx, lry);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gDPSetScissor(mode, ulx, uly, lrx, lry);
@@ -60,6 +61,7 @@ void GDPLoadBlockC(uint32_t tile, uint32_t ul_s, uint32_t ul_t,
          glide64gDPLoadBlock(tile, ul_s, ul_t, lr_s, dxt);
 #endif
          break;
+      case GFX_SOFT:
       case GFX_GLN64:
 #ifdef HAVE_GLN64
          gln64gDPLoadBlock(tile, ul_s, ul_t, lr_s, dxt);

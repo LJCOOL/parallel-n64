@@ -6,7 +6,11 @@ extern "C" {
 #endif
 
 #include <boolean.h>
+#ifdef HAVE_SOFT
+#include "soft/gl_compat.h"
+#else
 #include <glsm/glsmsym.h>
+#endif
 #include "gSP.h"
 
 #include "../../Graphics/RSP/gSP_state.h"

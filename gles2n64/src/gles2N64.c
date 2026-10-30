@@ -20,6 +20,9 @@
 #include "ShaderCombiner.h"
 #include "3DMath.h"
 #include "../../libretro/libretro_private.h"
+#ifdef HAVE_SOFT
+#include "soft/soft_backend.h"
+#endif
 
 uint32_t    last_good_ucode     = (uint32_t) -1;
 void        (*renderCallback)() = NULL;
@@ -81,10 +84,16 @@ int gln64InitiateGFX (GFX_INFO Gfx_Info)
 
 void gln64ProcessDList(void)
 {
+#ifdef HAVE_SOFT
+    soft_stats_begin();
+#endif
     OGL.frame_dl++;
 
     RSP_ProcessDList();
     OGL.mustRenderDlist = true;
+#ifdef HAVE_SOFT
+    soft_stats_end();
+#endif
 }
 
 void gln64ResizeVideoOutput(int Width, int Height)

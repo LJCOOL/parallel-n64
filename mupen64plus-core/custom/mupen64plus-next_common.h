@@ -43,6 +43,7 @@ enum rdp_plugin_type
    RDP_PLUGIN_GLN64,
    RDP_PLUGIN_GLIDE64,
    RDP_PLUGIN_NULL,
+   RDP_PLUGIN_SOFT,
    RDP_PLUGIN_MAX
 };
 
