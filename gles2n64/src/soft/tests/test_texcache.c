@@ -124,6 +124,48 @@ static void test_framebuffer_texture_uses_dummy(void)
    CHECK(decodes == 0);
 }
 
+static void test_pin_keeps_reused_texture(void)
+{
+   SoftTexKey a = key(5000, 64, 32);
+   const SoftTex *ta;
+   uint32_t i;
+   int before;
+
+   soft_texcache_init(64 * 1024);
+   ta = soft_texcache_lookup(&a, 0x200000, decode_fill, NULL);
+   soft_texcache_unpin_all();
+   soft_texcache_pin(ta);
+   for (i = 0; i < 40; i++)
+   {
+      SoftTexKey k = key(6000 + i, 64, 32);
+      soft_texcache_lookup(&k, 0x200000, decode_fill, NULL);
+   }
+   before = decodes;
+   CHECK(soft_texcache_lookup(&a, 0x200000, decode_fill, NULL) == ta);
+   CHECK(decodes == before);
+   soft_texcache_pin(NULL);
+}
+
+static void test_over_budget_reported_while_pinned(void)
+{
+   uint32_t i;
+
+   soft_texcache_init(64 * 1024);
+   CHECK(!soft_texcache_over_budget());
+   for (i = 0; i < 10; i++)
+   {
+      SoftTexKey k = key(7000 + i, 64, 32);
+      soft_texcache_lookup(&k, 0x200000, decode_fill, NULL);
+   }
+   CHECK(soft_texcache_over_budget());
+   soft_texcache_unpin_all();
+   {
+      SoftTexKey k = key(8000, 64, 32);
+      soft_texcache_lookup(&k, 0x200000, decode_fill, NULL);
+   }
+   CHECK(!soft_texcache_over_budget());
+}
+
 int main(void)
 {
    RUN(test_cache_hit_returns_same);
@@ -131,6 +173,8 @@ int main(void)
    RUN(test_cache_fills_rgba);
    RUN(test_cache_evicts_under_budget);
    RUN(test_pinned_entries_survive_eviction);
+   RUN(test_pin_keeps_reused_texture);
+   RUN(test_over_budget_reported_while_pinned);
    RUN(test_framebuffer_texture_uses_dummy);
    TEST_EXIT();
 }

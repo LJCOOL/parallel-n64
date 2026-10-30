@@ -26,6 +26,7 @@ static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
 static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
 static SoftTarget soft_target;
 static SoftQueue soft_queue;
+static const SoftTex *soft_current_tex;
 
 #define SOFT_TEXCACHE_BUDGET (7 * 1024 * 1024)
 
@@ -37,6 +38,7 @@ void soft_ogl_init(void)
    soft_target_init(&soft_target, soft_color, soft_depth, SOFT_WIDTH, SOFT_HEIGHT);
    soft_queue_reset(&soft_queue);
    soft_texcache_init(SOFT_TEXCACHE_BUDGET);
+   soft_current_tex = NULL;
    soft_mt_stop();
    if (log_cb)
       log_cb(RETRO_LOG_INFO, "soft: render threads %d\n", soft_mt_start() ? 2 : 1);
@@ -61,8 +63,10 @@ static void soft_flush(void)
 static void soft_record_tri(const SoftVert *v0, const SoftVert *v1, const SoftVert *v2,
       const SoftPipe *p)
 {
-   if (soft_queue_full(&soft_queue))
+   /* Flushing unpins textures, so pin this one again after any flush. */
+   if (soft_queue_full(&soft_queue) || soft_texcache_over_budget())
       soft_flush();
+   soft_texcache_pin(p->tex);
    soft_queue_tri(&soft_queue, &soft_target, v0, v1, v2, p);
 }
 
@@ -138,7 +142,6 @@ static void soft_update_combiner(void)
       Combiner_Set(gDP.combine.mux, -1);
 }
 
-static const SoftTex *soft_current_tex;
 
 /* Re-decodes tile 0 only when the texture, tile or TMEM state changed. */
 static const SoftTex *soft_texture(void)

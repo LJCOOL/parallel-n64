@@ -102,6 +102,10 @@ void gln64ResizeVideoOutput(int Width, int Height)
 
 void gln64RomClosed (void)
 {
+#ifdef HAVE_SOFT
+   /* Joins the render worker before the core can be unloaded. */
+   OGL_Stop();
+#endif
 }
 
 int gln64RomOpen (void)
