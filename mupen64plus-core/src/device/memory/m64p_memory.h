@@ -28,7 +28,10 @@
 #include "osal/preproc.h"
 
 enum { RDRAM_MAX_SIZE = 0x800000 };
-enum { CART_ROM_MAX_SIZE = 0x4000000 };
+#ifndef CART_ROM_MAX_BYTES
+#define CART_ROM_MAX_BYTES 0x4000000
+#endif
+enum { CART_ROM_MAX_SIZE = CART_ROM_MAX_BYTES };
 enum { DD_ROM_MAX_SIZE = 0x400000 };
 
 typedef void (*read32fn)(void*,uint32_t,uint32_t*);
