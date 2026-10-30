@@ -21,6 +21,8 @@ static SoftPipe pipe_;
 static SoftTri tri;
 static SoftTarget tgt;
 
+static double mhz = 1200.0;
+
 static uint64_t now(void)
 {
    struct timespec ts;
@@ -49,8 +51,8 @@ static void report(const char *name, RowFn fn)
       t0 = now() - t0;
       if (t0 < best) best = t0;
    }
-   printf("%-28s %7.1f ns/px %6.0f cyc/px @1800\n", name, best / (double)(W * H),
-         best / (double)(W * H) * 1.8);
+   printf("%-28s %7.1f ns/px %6.0f cyc/px\n", name, best / (double)(W * H),
+         best / (double)(W * H) * mhz / 1000.0);
    fflush(stdout);
 }
 
@@ -130,16 +132,10 @@ static void k_store(int y)
       d[x] = (uint16_t)(x + y);
 }
 
+static void k_fixed(int y) { soft_span_fixed(&tgt, &pipe_, &tri, y, 0, W); }
 static void k_neon(int y)  { soft_span_combine_neon(&tgt, &pipe_, &tri, y, 0, W); }
 static void k_scalar(int y) { soft_span_combine(&tgt, &pipe_, &tri, y, 0, W); }
 
-static void *spinner(void *arg)
-{
-   (void)arg;
-   while (!spin_stop)
-      sink++;
-   return NULL;
-}
 
 static void run_all(const char *tag)
 {
@@ -151,6 +147,18 @@ static void run_all(const char *tag)
    report("depth test", k_depth);
    report("texel fetch (scalar)", k_fetch);
    report("plain u16 store", k_store);
+   prog.mode = SC_TEX_MUL_SHADE;
+   report("fixed span tex*shade", k_fixed);
+   pipe_.fog = 1;
+   report("fixed span tex*shade+fog", k_fixed);
+   pipe_.fog = 0; pipe_.blend = SB_ALPHA;
+   report("fixed span tex*shade+blend", k_fixed);
+   pipe_.blend = SB_OPAQUE;
+   prog.mode = SC_GENERIC;
+   report("fixed span generic 1cyc", k_fixed);
+   prog.cycles = 2;
+   report("fixed span generic 2cyc", k_fixed);
+   prog.cycles = 1;
    prog.mode = SC_TEX_MUL_SHADE;
    report("neon span tex*shade", k_neon);
    pipe_.fog = 1;
@@ -173,6 +181,16 @@ int main(void)
 {
    pthread_t th;
    int i;
+   FILE *fq = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "r");
+
+   if (fq)
+   {
+      long khz;
+      if (fscanf(fq, "%ld", &khz) == 1)
+         mhz = khz / 1000.0;
+      fclose(fq);
+   }
+   printf("cpu %.0f MHz\n", mhz);
 
    for (i = 0; i < 32 * 32; i++) { trgb[i] = (uint16_t)(i * 2654435761u >> 16); ta[i] = 255; }
    tex.rgb = trgb; tex.a = ta; tex.w = 32; tex.h = 32; tex.mask_s = 31; tex.mask_t = 31;
@@ -189,9 +207,6 @@ int main(void)
    grad(&tri.w, 1.0f, 0.0001f); grad(&tri.sw, 0.0f, 0.2f); grad(&tri.tw, 0.0f, 0.0f);
 
    run_all("idle second core");
-   pthread_create(&th, NULL, spinner, NULL);
-   run_all("second core busy");
-   spin_stop = 1;
-   pthread_join(th, NULL);
+   (void)th;
    return 0;
 }
