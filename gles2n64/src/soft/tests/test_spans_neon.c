@@ -50,7 +50,7 @@ static void test_neon_matches_scalar(void)
    SoftTarget ts, tn;
    SoftPipe p;
    SoftTri tri;
-   int i, span, pixels = 0, colour_misses = 0, depth_misses = 0;
+   int i, span, pixels = 0, colour_misses = 0, exact_misses = 0, depth_misses = 0;
 
    for (i = 0; i < TW * TW; i++)
    {
@@ -127,13 +127,16 @@ static void test_neon_matches_scalar(void)
             depth_misses++;
          if (!lsb_close(col_s[i], col_n[i]))
             colour_misses++;
+         if (col_s[i] != col_n[i])
+            exact_misses++;
       }
       pixels += len;
    }
    /* 1/w differs in the last bits, so rare texel-boundary flips are allowed. */
    CHECK(depth_misses == 0);
    CHECK(colour_misses * 1000 <= pixels);
-   printf("spans_neon: %d pixels, %d colour misses\n", pixels, colour_misses);
+   CHECK(exact_misses * 1000 <= pixels);
+   printf("spans_neon: %d pixels, %d colour misses, %d inexact\n", pixels, colour_misses, exact_misses);
 }
 
 int main(void)
