@@ -12,6 +12,9 @@
 #include "soft_backend.h"
 #include "soft_ogl.h"
 #include "soft_xform.h"
+#include "spans.h"
+#include "texcache.h"
+#include "soft_textures.h"
 #include "../../../libretro/libretro_private.h"
 
 static uint16_t soft_color[SOFT_WIDTH * SOFT_HEIGHT];
@@ -19,12 +22,15 @@ static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
 static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
 static SoftTarget soft_target;
 
+#define SOFT_TEXCACHE_BUDGET (3 * 1024 * 1024)
+
 void soft_ogl_init(void)
 {
    memset(soft_color, 0, sizeof(soft_color));
    memset(soft_front, 0, sizeof(soft_front));
    memset(soft_depth, 0xff, sizeof(soft_depth));
    soft_target_init(&soft_target, soft_color, soft_depth, SOFT_WIDTH, SOFT_HEIGHT);
+   soft_texcache_init(SOFT_TEXCACHE_BUDGET);
 }
 
 const uint32_t *soft_frame(void)
@@ -47,6 +53,15 @@ void soft_present(void)
    if (!logged && log_cb)
       log_cb(RETRO_LOG_INFO, "soft: first frame presented\n");
    logged = true;
+}
+
+/* Float texels to 16.16, saturating instead of overflowing. */
+static int32_t soft_fixed16(float v)
+{
+   v *= 65536.0f;
+   if (v > 2147418112.0f) return 2147418112;
+   if (v < -2147418112.0f) return -2147418112;
+   return (int32_t)v;
 }
 
 static int soft_shift(void)
@@ -87,20 +102,99 @@ static void soft_flat_colors(struct SPVertex *v, SoftVert *out)
    out->a = (uint8_t)(v->flat_a * 255.0f);
 }
 
+static bool soft_mux_uses(int a, int b)
+{
+   int i;
+   for (i = 0; i < 4; i++)
+   {
+      const struct CombineCycle *c = &soft_dmux.decode[i];
+      if (c->sa == a || c->sb == a || c->m == a || c->a == a
+            || c->sa == b || c->sb == b || c->m == b || c->a == b)
+         return true;
+   }
+   return false;
+}
+
+static void soft_update_combiner(void)
+{
+   if (gDP.otherMode.cycleType == G_CYC_COPY)
+      Combiner_Set(EncodeCombineMode(0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0), -1);
+   else if (gDP.otherMode.cycleType == G_CYC_FILL)
+      Combiner_Set(EncodeCombineMode(0, 0, 0, SHADE, 0, 0, 0, 1, 0, 0, 0, SHADE, 0, 0, 0, 1), -1);
+   else
+      Combiner_Set(gDP.combine.mux, -1);
+}
+
+static const SoftTex *soft_current_tex;
+
+/* Re-decodes tile 0 only when the texture, tile or TMEM state changed. */
+static const SoftTex *soft_texture(void)
+{
+   if ((gSP.changed & CHANGED_TEXTURE) || (gDP.changed & (CHANGED_TILE | CHANGED_TMEM))
+         || soft_current_tex == NULL)
+   {
+      soft_current_tex = soft_texcache_get(0);
+      gSP.changed &= ~CHANGED_TEXTURE;
+      gDP.changed &= ~(CHANGED_TILE | CHANGED_TMEM);
+   }
+   return soft_current_tex;
+}
+
+/* Chooses span and per-draw state from RDP other modes and the combiner. */
+static void soft_build_pipe(SoftPipe *p, bool *textured)
+{
+   bool zbuf, shade;
+
+   soft_update_combiner();
+   memset(p, 0, sizeof(*p));
+   p->cull = soft_cull_mode();
+
+   zbuf = ((gSP.geometryMode & G_ZBUFFER) || gDP.otherMode.depthSource == G_ZS_PRIM)
+       && gDP.otherMode.cycleType <= G_CYC_2CYCLE && gDP.otherMode.depthCompare;
+   p->z_test   = zbuf;
+   p->z_update = zbuf && gDP.otherMode.depthUpdate;
+   p->decal    = gDP.otherMode.depthMode == ZMODE_DEC;
+
+   if (soft_combine_flags & SC_ALPHAENABLED)
+   {
+      p->alpha_test = 1;
+      p->alpha_ref  = gDP.otherMode.cvgXAlpha ? 128 : (uint8_t)(gDP.blendColor.a * 255.0f);
+      if ((soft_combine_flags & SC_ALPHAGREATER) && p->alpha_ref < 255)
+         p->alpha_ref++;
+   }
+
+   *textured = gDP.otherMode.cycleType != G_CYC_FILL
+            && soft_mux_uses(TEXEL0, TEXEL0_ALPHA);
+   if (*textured)
+   {
+      p->tex = soft_texture();
+      if (p->tex == NULL)
+         *textured = false;
+   }
+   shade = soft_mux_uses(SHADE, SHADE_ALPHA);
+
+   if (*textured)
+      p->span = shade ? soft_span_tex_gouraud_z : soft_span_tex_z;
+   else
+      p->span = zbuf ? soft_span_gouraud_z : soft_span_gouraud;
+}
+
 static void soft_draw_list(const uint8_t *elements, uint32_t count)
 {
    SoftViewport vp;
    SoftPipe pipe;
+   SoftTexCoords tc;
    uint32_t i;
+   bool textured;
    int shift = soft_shift();
    bool flat = (gSP.geometryMode & G_SHADE) == 0
             || (gSP.geometryMode & G_SHADING_SMOOTH) == 0;
 
    soft_viewport(&vp);
    soft_update_scissor(shift);
-   memset(&pipe, 0, sizeof(pipe));
-   pipe.span = soft_span_flat;
-   pipe.cull = soft_cull_mode();
+   soft_build_pipe(&pipe, &textured);
+   if (textured)
+      soft_tex_coords(0, &tc);
 
    for (i = 0; i + 2 < count; i += 3)
    {
@@ -113,6 +207,11 @@ static void soft_draw_list(const uint8_t *elements, uint32_t count)
             break;
          if (flat)
             soft_flat_colors(v, &sv[k]);
+         if (textured)
+         {
+            sv[k].s = soft_fixed16(v->s * tc.scale_s + tc.off_s);
+            sv[k].t = soft_fixed16(v->t * tc.scale_t + tc.off_t);
+         }
       }
       if (k == 3)
          soft_draw_tri(&soft_target, &sv[0], &sv[1], &sv[2], &pipe);
@@ -219,6 +318,66 @@ void OGL_DrawRect(int ulx, int uly, int lrx, int lry, float *color)
    }
    soft_update_scissor(shift);
    soft_fill(ulx >> shift, uly >> shift, lrx >> shift, lry >> shift, soft_pack565(c));
+}
+
+static void soft_rect_vert(SoftVert *v, float x, float y, int shift, uint16_t z, float s, float t)
+{
+   memset(v, 0, sizeof(*v));
+   v->x = (int32_t)(x * 16.0f) >> shift;
+   v->y = (int32_t)(y * 16.0f) >> shift;
+   v->z = z;
+   v->r = v->g = v->b = v->a = 255;
+   v->s = soft_fixed16(s);
+   v->t = soft_fixed16(t);
+   v->invw = 1.0f;
+}
+
+void OGL_DrawTexturedRect(const struct TexturedRectParams *_params)
+{
+   SoftPipe pipe;
+   SoftTexCoords tc;
+   SoftVert v[4];
+   bool textured;
+   float s0, t0, s1, t1, zf;
+   uint16_t z;
+   int shift = soft_shift();
+
+   soft_update_scissor(shift);
+   soft_build_pipe(&pipe, &textured);
+   pipe.cull = SOFT_CULL_NONE;
+   if (!textured)
+   {
+      float prim[4] = { gDP.primColor.r, gDP.primColor.g, gDP.primColor.b, gDP.primColor.a };
+      soft_fill((int)_params->ulx >> shift, (int)_params->uly >> shift,
+            (int)_params->lrx >> shift, (int)_params->lry >> shift, soft_pack565(prim));
+      return;
+   }
+   pipe.span = soft_span_tex_z;
+
+   soft_tex_coords(0, &tc);
+   s0 = _params->uls * tc.shift_s - gSP.textureTile[0]->fuls;
+   t0 = _params->ult * tc.shift_t - gSP.textureTile[0]->fult;
+   s1 = (_params->lrs + 1.0f) * tc.shift_s - gSP.textureTile[0]->fuls;
+   t1 = (_params->lrt + 1.0f) * tc.shift_t - gSP.textureTile[0]->fult;
+
+   zf = (gDP.otherMode.depthSource == G_ZS_PRIM) ? gDP.primDepth.z : gSP.viewport.nearz;
+   zf = zf * 32767.5f + 32767.5f;
+   z  = (uint16_t)(zf < 0.0f ? 0.0f : (zf > 65535.0f ? 65535.0f : zf));
+
+   soft_rect_vert(&v[0], _params->ulx, _params->uly, shift, z, s0, t0);
+   soft_rect_vert(&v[3], _params->lrx, _params->lry, shift, z, s1, t1);
+   if (_params->flip)
+   {
+      soft_rect_vert(&v[1], _params->lrx, _params->uly, shift, z, s0, t1);
+      soft_rect_vert(&v[2], _params->ulx, _params->lry, shift, z, s1, t0);
+   }
+   else
+   {
+      soft_rect_vert(&v[1], _params->lrx, _params->uly, shift, z, s1, t0);
+      soft_rect_vert(&v[2], _params->ulx, _params->lry, shift, z, s0, t1);
+   }
+   soft_draw_tri(&soft_target, &v[0], &v[1], &v[3], &pipe);
+   soft_draw_tri(&soft_target, &v[0], &v[3], &v[2], &pipe);
 }
 
 void OGL_ClearDepthBuffer(bool _fullsize)

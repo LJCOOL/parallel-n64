@@ -2,6 +2,7 @@
 
 #include "test.h"
 #include "raster.h"
+#include "spans.h"
 
 #define W 160
 #define H 120

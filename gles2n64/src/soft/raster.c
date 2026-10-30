@@ -22,16 +22,33 @@ void soft_set_scissor(SoftTarget *t, int x0, int y0, int x1, int y1)
    t->sy1 = clampi(y1, t->sy0, t->height);
 }
 
-void soft_span_flat(const SoftTarget *t, const SoftPipe *p,
-      const SoftTri *tri, int y, int x0, int x1)
+static void grad(SoftGrad *g, const SoftTri *tri, float a0, float a1, float a2)
 {
-   const SoftVert *v = tri->v[0];
-   uint16_t c = (uint16_t)(((v->r >> 3) << 11) | ((v->g >> 2) << 5) | (v->b >> 3));
-   uint16_t *dst = t->color + y * t->width;
-   int x;
-   (void)p;
-   for (x = x0; x < x1; x++)
-      dst[x] = c;
+   const SoftVert *v0 = tri->v[0], *v1 = tri->v[1], *v2 = tri->v[2];
+   float x0 = v0->x / 16.0f, y0 = v0->y / 16.0f;
+   float x1 = v1->x / 16.0f - x0, y1 = v1->y / 16.0f - y0;
+   float x2 = v2->x / 16.0f - x0, y2 = v2->y / 16.0f - y0;
+   float inv = 1.0f / (x1 * y2 - x2 * y1);
+   float d1 = a1 - a0, d2 = a2 - a0;
+
+   g->dx = (d1 * y2 - d2 * y1) * inv;
+   g->dy = (d2 * x1 - d1 * x2) * inv;
+   g->c  = a0 - g->dx * x0 - g->dy * y0;
+}
+
+/* Builds attribute planes for every interpolated value. */
+static void soft_tri_setup(SoftTri *tri)
+{
+   const SoftVert *a = tri->v[0], *b = tri->v[1], *c = tri->v[2];
+
+   grad(&tri->z, tri, a->z, b->z, c->z);
+   grad(&tri->r, tri, a->r, b->r, c->r);
+   grad(&tri->g, tri, a->g, b->g, c->g);
+   grad(&tri->b, tri, a->b, b->b, c->b);
+   grad(&tri->a, tri, a->a, b->a, c->a);
+   grad(&tri->w, tri, a->invw, b->invw, c->invw);
+   grad(&tri->sw, tri, a->s / 65536.0f * a->invw, b->s / 65536.0f * b->invw, c->s / 65536.0f * c->invw);
+   grad(&tri->tw, tri, a->t / 65536.0f * a->invw, b->t / 65536.0f * b->invw, c->t / 65536.0f * c->invw);
 }
 
 /* Edge a->b; top-left edges own their boundary pixels. */
@@ -101,6 +118,7 @@ void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
    tri.v[0] = v0;
    tri.v[1] = v1;
    tri.v[2] = v2;
+   soft_tri_setup(&tri);
 
    px = (int64_t)x0 * 16 + 8;
    py = (int64_t)y0 * 16 + 8;

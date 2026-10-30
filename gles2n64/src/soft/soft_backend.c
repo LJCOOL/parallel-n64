@@ -33,7 +33,6 @@ void OGL_Stop(void) { }
 
 void OGL_DrawTriangle(struct SPVertex *vertices, int v0, int v1, int v2) { }
 void OGL_DrawLine(int v0, int v1, float width) { }
-void OGL_DrawTexturedRect(const struct TexturedRectParams *_params) { }
 void OGL_UpdateFrameTime(void) { }
 void OGL_UpdateScale(void) { }
 void OGL_ResizeWindow(int x, int y, int width, int height) { }
@@ -66,7 +65,14 @@ bool TextureCache_Verify(void) { return true; }
 
 void ShaderCombiner_Init(void) { }
 void ShaderCombiner_Destroy(void) { }
-void ShaderCombiner_Set(DecodedMux *dmux, int flags) { }
+DecodedMux soft_dmux;
+int soft_combine_flags;
+
+void ShaderCombiner_Set(DecodedMux *dmux, int flags)
+{
+   soft_dmux = *dmux;
+   soft_combine_flags = flags;
+}
 void ShaderCombiner_UpdateBlendColor(void) { }
 void ShaderCombiner_UpdateEnvColor(void) { }
 void ShaderCombiner_UpdateFogColor(void) { }
