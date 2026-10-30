@@ -9,6 +9,7 @@
 #include "../RSP.h"
 #include "../gles2N64.h"
 #include "soft_backend.h"
+#include "soft_ogl.h"
 
 GLInfo OGL;
 TextureCache cache;
@@ -20,54 +21,22 @@ ShaderProgram *scProgramCurrent;
 int scProgramChanged;
 int scProgramCount;
 
-static uint16_t soft_color[SOFT_WIDTH * SOFT_HEIGHT];
-
-const uint16_t *soft_frame(void)
-{
-   return soft_color;
-}
-
 bool OGL_Start(void)
 {
-   memset(soft_color, 0, sizeof(soft_color));
+   soft_ogl_init();
    DepthBuffer_Init();
    return true;
 }
 
 void OGL_Stop(void) { }
 
-void OGL_AddTriangle(int v0, int v1, int v2) { }
 
-void OGL_DrawTriangles(void)
-{
-   OGL.triangles.num = 0;
-}
-
-void OGL_DrawDMATriangles(uint32_t _numVtx) { }
 void OGL_DrawTriangle(struct SPVertex *vertices, int v0, int v1, int v2) { }
-void OGL_DrawLLETriangle(uint32_t _numVtx) { }
 void OGL_DrawLine(int v0, int v1, float width) { }
-void OGL_DrawRect(int ulx, int uly, int lrx, int lry, float *color) { }
 void OGL_DrawTexturedRect(const struct TexturedRectParams *_params) { }
 void OGL_UpdateFrameTime(void) { }
 void OGL_UpdateScale(void) { }
-void OGL_ClearDepthBuffer(bool _fullsize) { }
-void OGL_ClearColorBuffer(float *color) { }
 void OGL_ResizeWindow(int x, int y, int width, int height) { }
-
-void OGL_SwapBuffers(void)
-{
-   int retro_return(bool a);
-
-   if (renderCallback)
-      (*renderCallback)();
-   retro_return(true);
-
-   scProgramChanged = 0;
-   gDP.otherMode.l = 0;
-   gln64gDPSetTextureLUT(G_TT_NONE);
-   ++__RSP.DList;
-}
 
 void OGL_ReadScreen(void *dest, int *width, int *height)
 {

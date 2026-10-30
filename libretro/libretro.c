@@ -1067,7 +1067,7 @@ static void present_frame(void)
 
 #ifdef HAVE_SOFT
          case GFX_SOFT:
-            video_cb(soft_frame(), SOFT_WIDTH, SOFT_HEIGHT, SOFT_WIDTH * 2);
+            video_cb(soft_frame(), SOFT_WIDTH, SOFT_HEIGHT, SOFT_WIDTH * 4);
             break;
 #endif
 
