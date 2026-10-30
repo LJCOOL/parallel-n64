@@ -71,6 +71,7 @@ static void calibrate(void)
    static uint16_t col[SOFT_WIDTH * SOFT_HEIGHT], dep[SOFT_WIDTH * SOFT_HEIGHT];
    static uint16_t trgb[32 * 32];
    static uint8_t ta[32 * 32];
+   static uint32_t trgba[32 * 32];
    SoftTex tex;
    SoftCombineProgram prog;
    SoftTarget t;
@@ -82,6 +83,8 @@ static void calibrate(void)
    for (i = 0; i < 32 * 32; i++) { trgb[i] = (uint16_t)(i * 2654435761u >> 16); ta[i] = 255; }
    memset(&tex, 0, sizeof(tex));
    tex.rgb = trgb; tex.a = ta; tex.w = 32; tex.h = 32; tex.mask_s = 31; tex.mask_t = 31;
+   tex.rgba = trgba;
+   soft_tex_expand(&tex);
    memset(&prog, 0, sizeof(prog));
    prog.cycles = 1; prog.uses_tex = 1; prog.uses_shade = 1;
    prog.sel[0][0][0] = TEXEL0; prog.sel[0][0][1] = ZERO; prog.sel[0][0][2] = SHADE; prog.sel[0][0][3] = ZERO;
