@@ -7,6 +7,14 @@
 extern "C" {
 #endif
 
+/* Screen bands alternate every 1 << SOFT_ROW_SHIFT rows between two render threads. */
+#define SOFT_ROW_SHIFT 3
+
+static inline int soft_row_in_band(int y, int band)
+{
+   return band < 0 || ((y >> SOFT_ROW_SHIFT) & 1) == band;
+}
+
 #define SOFT_CULL_NONE  0
 #define SOFT_CULL_BACK  1   /* clockwise on screen (y down) */
 #define SOFT_CULL_FRONT 2   /* counter-clockwise on screen */
@@ -74,6 +82,9 @@ void soft_target_init(SoftTarget *t, uint16_t *color, uint16_t *depth, int w, in
 void soft_set_scissor(SoftTarget *t, int x0, int y0, int x1, int y1);
 void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p);
+/* Draws only rows of band 0 or 1; band -1 draws every row. */
+void soft_draw_tri_band(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
+      const SoftVert *v2, const SoftPipe *p, int band);
 
 #ifdef __cplusplus
 }

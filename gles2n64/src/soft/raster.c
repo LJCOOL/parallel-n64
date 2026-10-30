@@ -129,7 +129,7 @@ static void clip_row(int64_t w, int64_t step, int *lo, int *hi)
 }
 
 static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
-      const SoftVert *v2, const SoftPipe *p)
+      const SoftVert *v2, const SoftPipe *p, int band)
 {
    SoftTri tri;
    Edge e[3];
@@ -170,7 +170,8 @@ static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
    tri.v[1] = v1;
    tri.v[2] = v2;
    soft_tri_setup(&tri);
-   soft_stats_count_tri();
+   if (band <= 0)
+      soft_stats_count_tri();
 
    px = (int64_t)x0 * 16 + 8;
    py = (int64_t)y0 * 16 + 8;
@@ -185,7 +186,7 @@ static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       clip_row(e[0].value, e[0].step_x, &lo, &hi);
       clip_row(e[1].value, e[1].step_x, &lo, &hi);
       clip_row(e[2].value, e[2].step_x, &lo, &hi);
-      if (lo < hi)
+      if (lo < hi && soft_row_in_band(y, band))
       {
          p->span(t, p, &tri, y, x0 + lo, x0 + hi);
          soft_stats_count_px(hi - lo);
@@ -201,6 +202,12 @@ void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p)
 {
    SOFT_TIME_BEGIN(t0);
-   draw_tri(t, v0, v1, v2, p);
+   draw_tri(t, v0, v1, v2, p, -1);
    SOFT_TIME_END(SOFT_T_RASTER, t0);
+}
+
+void soft_draw_tri_band(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
+      const SoftVert *v2, const SoftPipe *p, int band)
+{
+   draw_tri(t, v0, v1, v2, p, band);
 }
