@@ -29,7 +29,7 @@ static inline void expand565(uint16_t c, uint8_t *out)
    out[2] = (uint8_t)((c & 0x1f) << 3 | ((c >> 2) & 7));
 }
 
-static inline uint16_t blend_pixel(int mode, uint32_t src, uint16_t dst)
+static inline __attribute__((always_inline)) uint16_t blend_pixel(int mode, uint32_t src, uint16_t dst)
 {
    int a = (int)(src >> 24), ch, out[3];
    uint8_t d[3];
