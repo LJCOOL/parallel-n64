@@ -79,7 +79,7 @@ static int64_t floor16(int64_t v)
    return v >= 0 ? v / 16 : -((-v + 15) / 16);
 }
 
-void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
+static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p)
 {
    SoftTri tri;
@@ -158,4 +158,12 @@ void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       e[1].value += e[1].step_y;
       e[2].value += e[2].step_y;
    }
+}
+
+void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
+      const SoftVert *v2, const SoftPipe *p)
+{
+   SOFT_TIME_BEGIN(t0);
+   draw_tri(t, v0, v1, v2, p);
+   SOFT_TIME_END(SOFT_T_RASTER, t0);
 }
