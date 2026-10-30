@@ -93,8 +93,12 @@ static void Config_WriteConfig(const char *filename)
    int i;
    config.version = CONFIG_VERSION;
    f = (FILE*)fopen(filename, "w");
-   if (!f && log_cb)
-      log_cb(RETRO_LOG_ERROR, "Could Not Open %s for writing\n", filename);
+   if (!f)
+   {
+      if (log_cb)
+         log_cb(RETRO_LOG_ERROR, "Could Not Open %s for writing\n", filename);
+      return;
+   }
 
    for(i = 0; i < configOptionsSize; i++)
    {
