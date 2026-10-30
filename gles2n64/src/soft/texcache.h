@@ -49,6 +49,9 @@ const SoftTex *soft_texcache_get(uint32_t tile);
 /* Point-samples at 16.16 texel coordinates, applying the wrap modes. */
 uint16_t soft_tex_sample(const SoftTex *tex, int32_t s, int32_t t, uint8_t *alpha_out);
 
+/* Point-samples at float texel coordinates of any magnitude. */
+uint16_t soft_tex_sample_f(const SoftTex *tex, float s, float t, uint8_t *alpha_out);
+
 #ifdef __cplusplus
 }
 #endif

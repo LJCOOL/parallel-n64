@@ -107,8 +107,37 @@ static void test_wrap_mirror_clamp(void)
    CHECK(alpha == 255);
 }
 
+/* Large repeating coordinates must still vary across the span, not saturate. */
+static void test_large_tex_coords_still_vary(void)
+{
+   static uint16_t rgb[16];
+   static uint8_t a[16];
+   SoftTex tex;
+   SoftTarget t; SoftPipe p;
+   SoftVert v0 = vert(0, 0, 0, 255, 255, 255), v1 = vert(16, 0, 0, 255, 255, 255), v2 = vert(16, 16, 0, 255, 255, 255);
+   int i, distinct = 0;
+   uint16_t first;
+
+   for (i = 0; i < 16; i++) { rgb[i] = (uint16_t)(0x0800 * (i % 4 + 1)); a[i] = 255; }
+   memset(&tex, 0, sizeof(tex));
+   tex.rgb = rgb; tex.a = a; tex.w = 4; tex.h = 4;
+   tex.mask_s = 3; tex.mask_t = 3;
+
+   setup(&t, &p, soft_span_tex_z);
+   p.z_test = 0;
+   p.tex = &tex;
+   v0.s = 40000.0f; v1.s = 40016.0f; v2.s = 40016.0f;
+   soft_draw_tri(&t, &v0, &v1, &v2, &p);
+   first = color[0 * W + 1];
+   for (i = 2; i < 15; i++)
+      if (color[0 * W + i] != first)
+         distinct++;
+   CHECK(distinct > 0);
+}
+
 int main(void)
 {
+   RUN(test_large_tex_coords_still_vary);
    RUN(test_depth_rejects_farther);
    RUN(test_decal_wins_coplanar);
    RUN(test_gouraud_midpoint);

@@ -15,6 +15,8 @@ void soft_span_flat(const SoftTarget *t, const SoftPipe *p, const SoftTri *tri, 
 void soft_span_gouraud(const SoftTarget *t, const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1);
 void soft_span_gouraud_z(const SoftTarget *t, const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1);
 void soft_span_tex_z(const SoftTarget *t, const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1);
+/* Full pipeline: depth, texture, combiner, fog, alpha compare and blender. */
+void soft_span_combine(const SoftTarget *t, const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1);
 void soft_span_tex_gouraud_z(const SoftTarget *t, const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1);
 
 #ifdef __cplusplus

@@ -20,13 +20,14 @@ typedef struct
    int sx0, sy0, sx1, sy1;
 } SoftTarget;
 
-/* Screen-space vertex: x, y in 28.4 fixed point, s, t in 16.16 texels. */
+/* Screen-space vertex: x, y in 28.4 fixed point, s, t in texels. */
 typedef struct
 {
    int32_t x, y;
    uint16_t z;
    uint8_t r, g, b, a;
-   int32_t s, t;
+   uint8_t fog;      /* fog factor, 0 = none, 255 = full fog colour */
+   float s, t;
    float invw;
 } SoftVert;
 
@@ -40,7 +41,7 @@ typedef struct
 typedef struct
 {
    const SoftVert *v[3];
-   SoftGrad z, r, g, b, a, sw, tw, w;
+   SoftGrad z, r, g, b, a, f, sw, tw, w;
 } SoftTri;
 
 struct SoftTex;
@@ -61,6 +62,12 @@ typedef struct SoftPipe
    int alpha_test;            /* drop texels with alpha below alpha_ref */
    uint8_t alpha_ref;
    const struct SoftTex *tex;
+   const void *prog;          /* SoftCombineProgram for soft_span_combine */
+   uint8_t prim[4], env[4];
+   uint8_t prim_lod;
+   uint32_t fog_color;
+   int fog;
+   int blend;                 /* SoftBlendMode */
 } SoftPipe;
 
 void soft_target_init(SoftTarget *t, uint16_t *color, uint16_t *depth, int w, int h);
