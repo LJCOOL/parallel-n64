@@ -127,6 +127,9 @@ static int uses(const SoftCombineProgram *p, int a, int b)
 void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram *out)
 {
    int cy, k;
+   /* A second cycle that only passes COMBINED through adds nothing. */
+   if (two_cycle && is_single(&m->decode[2], COMBINED) && is_single(&m->decode[3], COMBINED))
+      two_cycle = 0;
    out->cycles = two_cycle ? 2 : 1;
    for (cy = 0; cy < 2; cy++)
       for (k = 0; k < 2; k++)

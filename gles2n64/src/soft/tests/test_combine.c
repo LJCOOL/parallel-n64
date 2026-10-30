@@ -32,6 +32,23 @@ static void test_classify_tex_mul_shade(void)
    CHECK(soft_combine_classify(&m) == SC_TEX_MUL_SHADE);
 }
 
+static void test_two_cycle_passthrough_uses_first_cycle(void)
+{
+   SoftCombineProgram prog;
+   DecodedMux m = mux_of(TEXEL0, ZERO, SHADE, ZERO, TEXEL0_ALPHA, ZERO, SHADE_ALPHA, ZERO);
+   m.decode[2].a = COMBINED;
+   m.decode[3].a = COMBINED_ALPHA;
+   soft_combine_compile(&m, 1, &prog);
+   CHECK(prog.mode == SC_TEX_MUL_SHADE);
+   CHECK(prog.cycles == 1);
+
+   /* A second cycle that does real work keeps the generic two-cycle program. */
+   m.decode[2].sa = ENVIRONMENT;
+   soft_combine_compile(&m, 1, &prog);
+   CHECK(prog.mode == SC_GENERIC);
+   CHECK(prog.cycles == 2);
+}
+
 static void test_unknown_mode_falls_back(void)
 {
    DecodedMux m = mux_of(NOISE, ZERO, SHADE, ZERO, ZERO, ZERO, ZERO, SHADE_ALPHA);
@@ -83,5 +100,6 @@ int main(void)
    RUN(test_generic_matches_formula);
    RUN(test_alpha_cutout);
    RUN(test_fog_blend);
+   RUN(test_two_cycle_passthrough_uses_first_cycle);
    TEST_EXIT();
 }
