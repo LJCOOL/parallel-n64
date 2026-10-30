@@ -24,7 +24,7 @@ static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
 static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
 static SoftTarget soft_target;
 
-#define SOFT_TEXCACHE_BUDGET (3 * 1024 * 1024)
+#define SOFT_TEXCACHE_BUDGET (7 * 1024 * 1024)
 
 void soft_ogl_init(void)
 {

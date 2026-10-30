@@ -21,7 +21,8 @@ static size_t budget, used;
 
 static uint16_t dummy_rgb[1];
 static uint8_t  dummy_a[1] = { 255 };
-static const SoftTex dummy = { dummy_rgb, dummy_a, 1, 1, SOFT_CLAMP, SOFT_CLAMP, 0, 0 };
+static uint32_t dummy_rgba[1] = { 0xff000000u };
+static const SoftTex dummy = { dummy_rgb, dummy_a, 1, 1, SOFT_CLAMP, SOFT_CLAMP, 0, 0, dummy_rgba };
 
 static unsigned bucket_of(const SoftTexKey *k)
 {
@@ -60,6 +61,19 @@ static void evict(Entry *e)
    free(e);
 }
 
+void soft_tex_expand(SoftTex *tex)
+{
+   int i, n = tex->w * tex->h;
+   for (i = 0; i < n; i++)
+   {
+      uint32_t t = tex->rgb[i];
+      uint32_t r = ((t >> 11) & 0x1f) << 3 | ((t >> 13) & 7);
+      uint32_t g = ((t >> 5) & 0x3f) << 2 | ((t >> 9) & 3);
+      uint32_t b = (t & 0x1f) << 3 | ((t >> 2) & 7);
+      tex->rgba[i] = r | g << 8 | b << 16 | (uint32_t)tex->a[i] << 24;
+   }
+}
+
 void soft_texcache_init(size_t budget_bytes)
 {
    while (lru_tail)
@@ -95,7 +109,7 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
    }
 
    texels = (size_t)key->w * key->h;
-   bytes  = sizeof(Entry) + texels * 3;
+   bytes  = sizeof(Entry) + texels * 7;
    while (lru_tail && used + bytes > budget)
       evict(lru_tail);
 
@@ -105,7 +119,8 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
    memset(e, 0, sizeof(Entry));
    e->key       = *key;
    e->bytes     = bytes;
-   e->tex.rgb   = (uint16_t*)(e + 1);
+   e->tex.rgba  = (uint32_t*)(e + 1);
+   e->tex.rgb   = (uint16_t*)(e->tex.rgba + texels);
    e->tex.a     = (uint8_t*)(e->tex.rgb + texels);
    e->tex.w     = key->w;
    e->tex.h     = key->h;
@@ -114,6 +129,7 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
    e->tex.mask_s = key->w - 1;
    e->tex.mask_t = key->h - 1;
    decode(ctx, &e->tex);
+   soft_tex_expand(&e->tex);
 
    e->next = buckets[b];
    buckets[b] = e;

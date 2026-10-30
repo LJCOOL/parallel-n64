@@ -12,7 +12,7 @@ extern "C" {
 #define SOFT_MIRROR 1
 #define SOFT_CLAMP  2
 
-/* Decoded texture: RGB565 and 8-bit alpha planes, w * h texels each. */
+/* Decoded texture: RGB565, 8-bit alpha and expanded RGBA8888 planes, w * h texels each. */
 typedef struct SoftTex
 {
    uint16_t *rgb;
@@ -20,7 +20,11 @@ typedef struct SoftTex
    uint16_t w, h;
    uint8_t wrap_s, wrap_t;
    uint16_t mask_s, mask_t;   /* w - 1 and h - 1 */
+   uint32_t *rgba;            /* R in the low byte, alpha in the high byte */
 } SoftTex;
+
+/* Fills tex->rgba from tex->rgb and tex->a, replicating high bits like the spans do. */
+void soft_tex_expand(SoftTex *tex);
 
 /* Identity of a decoded texture; crc covers TMEM contents and tile parameters. */
 typedef struct
