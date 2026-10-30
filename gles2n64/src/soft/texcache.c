@@ -90,6 +90,18 @@ void soft_texcache_unpin_all(void)
       e->pinned = 0;
 }
 
+void soft_texcache_pin(const SoftTex *tex)
+{
+   /* Cached textures are the first member of their Entry. */
+   if (tex && tex != &dummy)
+      ((Entry*)tex)->pinned = 1;
+}
+
+int soft_texcache_over_budget(void)
+{
+   return used > budget;
+}
+
 /* Oldest entry that no queued command still uses, or NULL. */
 static Entry *oldest_unpinned(void)
 {
