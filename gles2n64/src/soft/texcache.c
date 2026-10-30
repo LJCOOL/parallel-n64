@@ -152,15 +152,19 @@ uint16_t soft_tex_sample(const SoftTex *tex, int32_t s, int32_t t, uint8_t *alph
    return sample_texel(tex, s >> 16, t >> 16, alpha_out);
 }
 
-/* Keeps float to int conversion defined for any finite coordinate. */
-static int texel_index(float v)
+int soft_texel_index(float v)
 {
    if (v > 1073741824.0f) return 1073741824;
    if (v < -1073741824.0f) return -1073741824;
    return (int)floorf(v);
 }
 
+uint16_t soft_tex_sample_i(const SoftTex *tex, int s, int t, uint8_t *alpha_out)
+{
+   return sample_texel(tex, s, t, alpha_out);
+}
+
 uint16_t soft_tex_sample_f(const SoftTex *tex, float s, float t, uint8_t *alpha_out)
 {
-   return sample_texel(tex, texel_index(s), texel_index(t), alpha_out);
+   return sample_texel(tex, soft_texel_index(s), soft_texel_index(t), alpha_out);
 }

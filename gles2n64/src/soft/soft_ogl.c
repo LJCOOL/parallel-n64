@@ -148,7 +148,7 @@ static void soft_build_pipe(SoftPipe *p, bool *textured)
 
    memset(p, 0, sizeof(*p));
    p->cull = soft_cull_mode();
-   p->span = soft_span_combine;
+   p->span = SOFT_SPAN_COMBINE;
    p->prog = &soft_prog;
 
    zbuf = ((gSP.geometryMode & G_ZBUFFER) || gDP.otherMode.depthSource == G_ZS_PRIM)
