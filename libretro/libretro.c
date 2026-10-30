@@ -541,6 +541,8 @@ static void core_settings_set_defaults(void)
          gfx_plugin = GFX_GLIDE64;
 #endif
 #endif
+      if(gfx_var.value && !strcmp(gfx_var.value, "null"))
+         gfx_plugin = GFX_NULL;
 #ifdef HAVE_THR_AL
 	  if(gfx_var.value && !strcmp(gfx_var.value, "angrylion"))
          gfx_plugin = GFX_ANGRYLION;
@@ -1200,6 +1202,7 @@ static void emu_step_initialize(void)
    switch (gfx_plugin)
    {
       case GFX_ANGRYLION: current_rdp_type = RDP_PLUGIN_ANGRYLION; break;
+      case GFX_NULL:      current_rdp_type = RDP_PLUGIN_NULL;      break;
       case GFX_PARALLEL:  current_rdp_type = RDP_PLUGIN_PARALLEL;  break;
       case GFX_GLIDEN64:  current_rdp_type = RDP_PLUGIN_GLIDEN64;  break;
       case GFX_RICE:      current_rdp_type = RDP_PLUGIN_RICE;      break;
@@ -1298,6 +1301,7 @@ void deinit_gfx_plugin(void)
 #endif
           break;
        case GFX_ANGRYLION:
+       case GFX_NULL:
           break;
        default:
           /* All GL renderers (gln64 / gliden64 / glide64 / rice) bring up the
@@ -1484,6 +1488,7 @@ static void context_reset(void)
    switch (gfx_plugin)
    {
       case GFX_ANGRYLION:
+      case GFX_NULL:
       case GFX_PARALLEL:
          break;
       default:
@@ -2433,6 +2438,8 @@ void update_variables(bool startup)
          if(!strcmp(var.value, "glide64"))
             gfx_plugin = GFX_GLIDE64;
 #endif
+         if(!strcmp(var.value, "null"))
+            gfx_plugin = GFX_NULL;
 #ifdef HAVE_THR_AL
          if(!strcmp(var.value, "angrylion"))
             gfx_plugin = GFX_ANGRYLION;
@@ -3480,9 +3487,11 @@ bool retro_load_game(const struct retro_game_info *game)
 
    init_audio_libretro();
 
+   if (gfx_plugin != GFX_NULL
 #ifdef HAVE_THR_AL
-   if (gfx_plugin != GFX_ANGRYLION)
+       && gfx_plugin != GFX_ANGRYLION
 #endif
+      )
    {
       if (gfx_plugin == GFX_PARALLEL)
       {
@@ -3675,6 +3684,8 @@ static void glsm_exit(void)
 #ifndef HAVE_SHARED_CONTEXT
    if (g_real_stop)
       return;
+   if (gfx_plugin == GFX_NULL)
+      return;
 #ifdef HAVE_THR_AL
    if (gfx_plugin == GFX_ANGRYLION)
       return;
@@ -3697,6 +3708,8 @@ static void glsm_enter(void)
 {
 #ifndef HAVE_SHARED_CONTEXT
    if (g_real_stop)
+      return;
+   if (gfx_plugin == GFX_NULL)
       return;
 #ifdef HAVE_THR_AL
    if (gfx_plugin == GFX_ANGRYLION)
@@ -3900,6 +3913,7 @@ void retro_run (void)
             break;
          case GFX_PARALLEL:
          case GFX_ANGRYLION:
+         case GFX_NULL:
             break;
       }
    }

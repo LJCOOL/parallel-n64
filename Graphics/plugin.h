@@ -13,6 +13,7 @@ enum gfx_plugin_type
    GFX_ANGRYLION,
    GFX_PARALLEL,
    GFX_GLIDEN64,
+   GFX_NULL,
 };
 
 enum fork_rsp_plugin_type

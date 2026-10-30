@@ -110,6 +110,7 @@ DEFINE_GFX(gliden64);
 #if defined(HAVE_GLIDE64)
 DEFINE_GFX(glide64);
 #endif
+DEFINE_GFX(null);
 
 gfx_plugin_functions gfx;
 GFX_INFO gfx_info;
@@ -449,6 +450,9 @@ void plugin_connect_all()
 #elif defined(HAVE_GLN64)
           gfx = gfx_gln64;
 #endif
+          break;
+      case RDP_PLUGIN_NULL:
+          gfx = gfx_null;
           break;
       case RDP_PLUGIN_NONE:
       default:

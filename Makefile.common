@@ -90,6 +90,7 @@ CXXFLAGS += -DHAVE_RSP_DUMP
 endif
 
 # Core
+SOURCES_C += $(ROOT_DIR)/gfx_null/gfx_null.c
 SOURCES_C += \
 	$(CORE_DIR)/src/api/callbacks.c \
 	$(CORE_DIR)/src/api/common.c \
