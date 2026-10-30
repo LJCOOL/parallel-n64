@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "test.h"
@@ -207,6 +208,57 @@ static void test_cull_back(void)
    CHECK(count_hits(&doubles) > 0);
 }
 
+/* Writes values that depend on pixel and prior contents, so order and coverage matter. */
+static void stamp_span(const SoftTarget *t, const SoftPipe *p,
+      const SoftTri *tri, int y, int x0, int x1)
+{
+   int x;
+   (void)p;
+   for (x = x0; x < x1; x++)
+   {
+      uint16_t *c = &t->color[y * t->width + x], *z = &t->depth[y * t->width + x];
+      *c = (uint16_t)(*c * 31 + x + (tri->v[0]->x & 0xff));
+      *z = (uint16_t)(*z ^ (y * 7 + x));
+   }
+}
+
+static void test_bands_compose_to_full_draw(void)
+{
+   static uint16_t ca[W * H], za[W * H], cb[W * H], zb[W * H], cc[W * H], zc[W * H], c0[W * H], z0[W * H];
+   SoftTarget ta, tb, tc; SoftPipe p;
+   int i, x, y, untouched = 1;
+
+   for (i = 0; i < W * H; i++)
+      ca[i] = cb[i] = cc[i] = (uint16_t)rand(), za[i] = zb[i] = zc[i] = (uint16_t)rand();
+   memcpy(c0, ca, sizeof ca); memcpy(z0, za, sizeof za);
+   soft_target_init(&ta, ca, za, W, H);
+   soft_target_init(&tb, cb, zb, W, H);
+   soft_target_init(&tc, cc, zc, W, H);
+   memset(&p, 0, sizeof p);
+   p.span = stamp_span;
+   p.cull = SOFT_CULL_NONE;
+   for (i = 0; i < 400; i++)
+   {
+      int32_t r = (i % 3 == 0) ? 160 * 16 : (i % 3 == 1) ? 2000 * 16 : 40000 * 16;
+      SoftVert v[3];
+      for (x = 0; x < 3; x++)
+         v[x] = vert_fixed(rnd_coord(-r, r + W * 16), rnd_coord(-r, r + H * 16));
+      soft_set_scissor(&ta, 3, 2, W - 5, H - 7);
+      soft_set_scissor(&tb, 3, 2, W - 5, H - 7);
+      soft_draw_tri(&ta, &v[0], &v[1], &v[2], &p);
+      soft_draw_tri_band(&tb, &v[0], &v[1], &v[2], &p, 0);
+      soft_draw_tri_band(&tb, &v[0], &v[1], &v[2], &p, 1);
+      soft_draw_tri_band(&tc, &v[0], &v[1], &v[2], &p, 0);
+   }
+   CHECK(memcmp(ca, cb, sizeof ca) == 0);
+   CHECK(memcmp(za, zb, sizeof za) == 0);
+   for (y = 0; y < H; y++)
+      if (soft_row_in_band(y, 1))
+         for (x = 0; x < W; x++)
+            untouched &= cc[y * W + x] == c0[y * W + x] && zc[y * W + x] == z0[y * W + x];
+   CHECK(untouched);
+}
+
 int main(void)
 {
    RUN(test_fill_rule_shared_edge);
@@ -214,5 +266,6 @@ int main(void)
    RUN(test_reject_degenerate_and_offscreen);
    RUN(test_cull_back);
    RUN(test_coverage_matches_brute_force);
+   RUN(test_bands_compose_to_full_draw);
    TEST_EXIT();
 }
