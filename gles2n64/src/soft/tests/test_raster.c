@@ -92,6 +92,64 @@ static void test_fill_rule_shared_edge(void)
    CHECK(color[7 * W + 0] == 0x001F);
 }
 
+static uint32_t seed = 777;
+
+static int32_t rnd_coord(int32_t lo, int32_t hi)
+{
+   seed = seed * 1664525u + 1013904223u;
+   return lo + (int32_t)((seed >> 8) % (uint32_t)(hi - lo));
+}
+
+/* Edge function with the rasteriser's top-left rule, at pixel centres. */
+static int inside_edge(const SoftVert *a, const SoftVert *b, int x, int y)
+{
+   int64_t dx = (int64_t)b->x - a->x, dy = (int64_t)b->y - a->y;
+   int64_t w = dx * ((int64_t)y * 16 + 8 - a->y) - dy * ((int64_t)x * 16 + 8 - a->x);
+   int top_left = (dy < 0) || (dy == 0 && dx > 0);
+   return top_left ? w >= 0 : w > 0;
+}
+
+static void test_coverage_matches_brute_force(void)
+{
+   SoftTarget t; SoftPipe p;
+   int i, x, y, misses = 0;
+
+   for (i = 0; i < 400; i++)
+   {
+      /* Mix of small, screen-sized and far off-screen slivers. */
+      int32_t r = (i % 3 == 0) ? 160 * 16 : (i % 3 == 1) ? 2000 * 16 : 40000 * 16;
+      SoftVert v[3];
+      const SoftVert *a, *b, *c;
+      int64_t area;
+
+      for (x = 0; x < 3; x++)
+      {
+         v[x] = vert_fixed(rnd_coord(-r, r + W * 16), rnd_coord(-r, r + H * 16));
+         /* Half-pixel snapping puts edges exactly on pixel centres. */
+         if (i & 4)
+         {
+            v[x].x &= ~7;
+            v[x].y &= ~7;
+         }
+      }
+      setup(&t, &p);
+      soft_set_scissor(&t, 3, 2, W - 5, H - 7);
+      soft_draw_tri(&t, &v[0], &v[1], &v[2], &p);
+
+      area = ((int64_t)v[1].x - v[0].x) * ((int64_t)v[2].y - v[0].y)
+           - ((int64_t)v[2].x - v[0].x) * ((int64_t)v[1].y - v[0].y);
+      a = &v[0]; b = area < 0 ? &v[2] : &v[1]; c = area < 0 ? &v[1] : &v[2];
+      for (y = 0; y < H; y++)
+         for (x = 0; x < W; x++)
+         {
+            int want = area != 0 && x >= 3 && x < W - 5 && y >= 2 && y < H - 7
+                  && inside_edge(a, b, x, y) && inside_edge(b, c, x, y) && inside_edge(c, a, x, y);
+            misses += want != hits[y * W + x];
+         }
+   }
+   CHECK(misses == 0);
+}
+
 static void test_scissor_clamps_to_target(void)
 {
    SoftTarget t; SoftPipe p; int doubles, n;
@@ -155,5 +213,6 @@ int main(void)
    RUN(test_scissor_clamps_to_target);
    RUN(test_reject_degenerate_and_offscreen);
    RUN(test_cull_back);
+   RUN(test_coverage_matches_brute_force);
    TEST_EXIT();
 }

@@ -1,3 +1,4 @@
+#include <math.h>
 #include "raster.h"
 #include "soft_stats.h"
 
@@ -79,13 +80,61 @@ static int64_t floor16(int64_t v)
    return v >= 0 ? v / 16 : -((-v + 15) / 16);
 }
 
+/* Narrows [*lo, *hi) to the pixels k where w + k * step >= 0. */
+static void clip_row(int64_t w, int64_t step, int *lo, int *hi)
+{
+   int n = *hi, k;
+   double q;
+
+   if (step == 0)
+   {
+      if (w < 0)
+         *hi = *lo;
+      return;
+   }
+   if (step > 0)
+   {
+      if (w >= 0)
+         return;
+      q = ceil((double)-w / (double)step);
+      if (q >= n)
+      {
+         *lo = *hi;
+         return;
+      }
+      k = (int)q;
+      while (k > 0 && w + (int64_t)(k - 1) * step >= 0)
+         k--;
+      while (k < n && w + (int64_t)k * step < 0)
+         k++;
+      if (k > *lo)
+         *lo = k;
+      return;
+   }
+   if (w < 0)
+   {
+      *hi = *lo;
+      return;
+   }
+   q = floor((double)w / (double)-step);
+   if (q >= n - 1)
+      return;
+   k = (int)q;
+   while (k < n - 1 && w + (int64_t)(k + 1) * step >= 0)
+      k++;
+   while (k >= 0 && w + (int64_t)k * step < 0)
+      k--;
+   if (k + 1 < *hi)
+      *hi = k + 1;
+}
+
 static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p)
 {
    SoftTri tri;
    Edge e[3];
    int64_t area, minx, miny, maxx, maxy, px, py;
-   int x, y, x0, y0, x1, y1;
+   int y, x0, y0, x1, y1;
    const SoftVert *a = v0, *b = v1, *c = v2;
 
    area = ((int64_t)v1->x - v0->x) * ((int64_t)v2->y - v0->y)
@@ -131,27 +180,15 @@ static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
 
    for (y = y0; y < y1; y++)
    {
-      int64_t w0 = e[0].value, w1 = e[1].value, w2 = e[2].value;
-      int start = -1, end = -1;
+      int lo = 0, hi = x1 - x0;
 
-      for (x = x0; x < x1; x++)
+      clip_row(e[0].value, e[0].step_x, &lo, &hi);
+      clip_row(e[1].value, e[1].step_x, &lo, &hi);
+      clip_row(e[2].value, e[2].step_x, &lo, &hi);
+      if (lo < hi)
       {
-         if ((w0 | w1 | w2) >= 0)
-         {
-            if (start < 0)
-               start = x;
-            end = x + 1;
-         }
-         else if (start >= 0)
-            break;
-         w0 += e[0].step_x;
-         w1 += e[1].step_x;
-         w2 += e[2].step_x;
-      }
-      if (start >= 0)
-      {
-         p->span(t, p, &tri, y, start, end);
-         soft_stats_count_px(end - start);
+         p->span(t, p, &tri, y, x0 + lo, x0 + hi);
+         soft_stats_count_px(hi - lo);
       }
 
       e[0].value += e[0].step_y;
