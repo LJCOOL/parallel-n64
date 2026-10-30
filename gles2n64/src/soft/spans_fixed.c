@@ -23,12 +23,15 @@ static float at(const SoftGrad *g, float fx, float fy)
    return g->c + g->dx * fx + g->dy * fy;
 }
 
-static int32_t fix16(float v)
+/* floorf without the libm call; valid while v * 65536 fits in int32. */
+static inline int32_t fix16(float v)
 {
-   return (int32_t)floorf(v * 65536.0f);
+   float x = v * 65536.0f;
+   int32_t i = (int32_t)x;
+   return i - ((float)i > x);
 }
 
-static int32_t tex16(float v)
+static inline int32_t tex16(float v)
 {
    v = v < -TEX_LIMIT ? -TEX_LIMIT : (v > TEX_LIMIT ? TEX_LIMIT : v);
    return fix16(v);
@@ -113,9 +116,13 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
    int32_t f = fix16(at(&tri->f, fx, fy)), df = fix16(tri->f.dx);
    int64_t z = (int64_t)floor((double)at(&tri->z, fx, fy) * 65536.0);
    int64_t dz = (int64_t)floor((double)tri->z.dx * 65536.0);
-   int32_t s = 0, tt = 0, ds = 0, dt = 0;
+   int32_t s = 0, tt = 0, ds = 0, dt = 0, seg_s = 0, seg_t = 0;
    int bias = p->decal ? SOFT_DECAL_BIAS : 0, mode = prog->mode, uses_tex = prog->uses_tex;
    int pow2 = 0, ms = 0, mt = 0, x, ch;
+   /* Rows whose depth stays in [0, 65536) step unsigned 32-bit; others need 64-bit. */
+   int64_t z_end = z + dz * (x1 - x0 - 1);
+   int z_fast = z >= 0 && z < (65536LL << 16) && z_end >= 0 && z_end < (65536LL << 16);
+   uint32_t z32 = (uint32_t)z, dz32 = (uint32_t)dz;
    GenericPlan plan;
    uint8_t v[R_COUNT * 4];
 
@@ -156,17 +163,18 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
          int32_t se = tex16((sw0 + tri->sw.dx * ke) * rw), te = tex16((tw0 + tri->tw.dx * ke) * rw);
          if (k)
          {
-            float kf = (float)k, rk = 1.0f / (w0 + tri->w.dx * kf);
-            s  = tex16((sw0 + tri->sw.dx * kf) * rk);
-            tt = tex16((tw0 + tri->tw.dx * kf) * rk);
+            s  = seg_s;
+            tt = seg_t;
          }
+         seg_s = se;
+         seg_t = te;
          ds = (se - s) >> SEG_SHIFT;
          dt = (te - tt) >> SEG_SHIFT;
       }
 
       if (p->z_test)
       {
-         zi = (int)(z >> 16) - bias;
+         zi = (z_fast ? (int)(z32 >> 16) : (int)(z >> 16)) - bias;
          zi = zi < 0 ? 0 : (zi > 65535 ? 65535 : zi);
          if (zi > zb[x])
             goto next;
@@ -233,7 +241,11 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       if (p->z_test && p->z_update)
          zb[x] = (uint16_t)zi;
 next:
-      r += dr; g += dg; b += db; a += da; f += df; z += dz;
+      r += dr; g += dg; b += db; a += da; f += df;
+      if (z_fast)
+         z32 += dz32;
+      else
+         z += dz;
       s += ds; tt += dt;
    }
 }
