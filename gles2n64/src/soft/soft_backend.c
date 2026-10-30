@@ -28,7 +28,10 @@ bool OGL_Start(void)
    return true;
 }
 
-void OGL_Stop(void) { }
+void OGL_Stop(void)
+{
+   soft_ogl_stop();
+}
 
 
 void OGL_DrawTriangle(struct SPVertex *vertices, int v0, int v1, int v2) { }
