@@ -1,5 +1,6 @@
 #include "spans.h"
 #include "span_pixel.h"
+#include "soft_stats.h"
 
 #ifdef __ARM_NEON
 
@@ -175,6 +176,7 @@ void soft_span_combine_neon(const SoftTarget *t, const SoftPipe *p,
    int fast = prog->mode <= SC_TEX_MUL_ENV, x;
 
    soft_pixel_inputs(p, &in);
+   soft_stats_count_path(!fast, x1 - x0);
 
    for (x = x0; x < x1; x += 4, k = vaddq_f32(k, four))
    {
