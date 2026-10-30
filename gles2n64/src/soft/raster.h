@@ -30,11 +30,20 @@ typedef struct
    float invw;
 } SoftVert;
 
-/* A triangle after setup, with vertices in the order they were submitted. */
+/* Attribute plane: value at pixel centre (px, py) is c + dx * px + dy * py. */
+typedef struct
+{
+   float dx, dy, c;
+} SoftGrad;
+
+/* A triangle after setup; s and t planes hold s/w and t/w for perspective. */
 typedef struct
 {
    const SoftVert *v[3];
+   SoftGrad z, r, g, b, a, sw, tw, w;
 } SoftTri;
+
+struct SoftTex;
 
 struct SoftPipe;
 
@@ -46,16 +55,18 @@ typedef struct SoftPipe
 {
    SoftSpanFn span;
    int cull;
+   int z_test;                /* compare against the depth buffer */
+   int z_update;              /* write depth when the test passes */
+   int decal;                 /* decal Z mode: bias the compare */
+   int alpha_test;            /* drop texels with alpha below alpha_ref */
+   uint8_t alpha_ref;
+   const struct SoftTex *tex;
 } SoftPipe;
 
 void soft_target_init(SoftTarget *t, uint16_t *color, uint16_t *depth, int w, int h);
 void soft_set_scissor(SoftTarget *t, int x0, int y0, int x1, int y1);
 void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p);
-
-/* Writes v0's colour as RGB565. */
-void soft_span_flat(const SoftTarget *t, const SoftPipe *p,
-      const SoftTri *tri, int y, int x0, int x1);
 
 #ifdef __cplusplus
 }
