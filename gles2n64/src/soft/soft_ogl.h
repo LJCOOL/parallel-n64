@@ -14,6 +14,9 @@ extern int soft_combine_flags;
 /* Clears the render target and the presented frame. */
 void soft_ogl_init(void);
 
+/* Stops the render worker and drops any recorded, undrawn commands. */
+void soft_ogl_stop(void);
+
 /* Publishes the finished frame for video_cb. */
 void soft_present(void);
 

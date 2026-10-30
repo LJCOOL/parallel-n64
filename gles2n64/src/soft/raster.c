@@ -201,9 +201,7 @@ static void draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
 void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p)
 {
-   SOFT_TIME_BEGIN(t0);
    draw_tri(t, v0, v1, v2, p, -1);
-   SOFT_TIME_END(SOFT_T_RASTER, t0);
 }
 
 void soft_draw_tri_band(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,

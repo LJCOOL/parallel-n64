@@ -17,12 +17,15 @@
 #include "texcache.h"
 #include "soft_textures.h"
 #include "combine.h"
+#include "queue.h"
+#include "soft_mt.h"
 #include "../../../libretro/libretro_private.h"
 
 static uint16_t soft_color[SOFT_WIDTH * SOFT_HEIGHT];
 static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
 static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
 static SoftTarget soft_target;
+static SoftQueue soft_queue;
 
 #define SOFT_TEXCACHE_BUDGET (7 * 1024 * 1024)
 
@@ -32,7 +35,35 @@ void soft_ogl_init(void)
    memset(soft_front, 0, sizeof(soft_front));
    memset(soft_depth, 0xff, sizeof(soft_depth));
    soft_target_init(&soft_target, soft_color, soft_depth, SOFT_WIDTH, SOFT_HEIGHT);
+   soft_queue_reset(&soft_queue);
    soft_texcache_init(SOFT_TEXCACHE_BUDGET);
+   soft_mt_stop();
+   if (log_cb)
+      log_cb(RETRO_LOG_INFO, "soft: render threads %d\n", soft_mt_start() ? 2 : 1);
+   else
+      soft_mt_start();
+}
+
+/* Draws every recorded command on both cores, then releases their textures. */
+static void soft_flush(void)
+{
+   if (!soft_queue.count)
+      return;
+   {
+      SOFT_TIME_BEGIN(t0);
+      soft_mt_replay(&soft_queue, &soft_target);
+      SOFT_TIME_END(SOFT_T_RASTER, t0);
+   }
+   soft_texcache_unpin_all();
+   soft_queue_reset(&soft_queue);
+}
+
+static void soft_record_tri(const SoftVert *v0, const SoftVert *v1, const SoftVert *v2,
+      const SoftPipe *p)
+{
+   if (soft_queue_full(&soft_queue))
+      soft_flush();
+   soft_queue_tri(&soft_queue, &soft_target, v0, v1, v2, p);
 }
 
 const uint32_t *soft_frame(void)
@@ -251,7 +282,7 @@ static void soft_draw_list(const uint8_t *elements, uint32_t count)
       if (k < n)
          continue;
       for (k = 1; k + 1 < n; k++)
-         soft_draw_tri(&soft_target, &sv[0], &sv[k], &sv[k + 1], &pipe);
+         soft_record_tri(&sv[0], &sv[k], &sv[k + 1], &pipe);
    }
 }
 
@@ -326,17 +357,9 @@ static uint16_t soft_pack565(const float *c)
 
 static void soft_fill(int x0, int y0, int x1, int y1, uint16_t c)
 {
-   int x, y;
-   if (x0 < soft_target.sx0) x0 = soft_target.sx0;
-   if (y0 < soft_target.sy0) y0 = soft_target.sy0;
-   if (x1 > soft_target.sx1) x1 = soft_target.sx1;
-   if (y1 > soft_target.sy1) y1 = soft_target.sy1;
-   for (y = y0; y < y1; y++)
-   {
-      uint16_t *row = soft_color + y * SOFT_WIDTH;
-      for (x = x0; x < x1; x++)
-         row[x] = c;
-   }
+   if (soft_queue_full(&soft_queue))
+      soft_flush();
+   soft_queue_fill(&soft_queue, &soft_target, x0, y0, x1, y1, c);
 }
 
 static void soft_rect_vert(SoftVert *v, float x, float y, int shift, uint16_t z, float s, float t)
@@ -378,8 +401,8 @@ void OGL_DrawRect(int ulx, int uly, int lrx, int lry, float *color)
       soft_rect_vert(&v[1], (float)lrx, (float)uly, shift, z, 0.0f, 0.0f);
       soft_rect_vert(&v[2], (float)ulx, (float)lry, shift, z, 0.0f, 0.0f);
       soft_rect_vert(&v[3], (float)lrx, (float)lry, shift, z, 0.0f, 0.0f);
-      soft_draw_tri(&soft_target, &v[0], &v[1], &v[3], &pipe);
-      soft_draw_tri(&soft_target, &v[0], &v[3], &v[2], &pipe);
+      soft_record_tri(&v[0], &v[1], &v[3], &pipe);
+      soft_record_tri(&v[0], &v[3], &v[2], &pipe);
    }
 }
 
@@ -423,21 +446,29 @@ void OGL_DrawTexturedRect(const struct TexturedRectParams *_params)
       soft_rect_vert(&v[1], _params->lrx, _params->uly, shift, z, s1, t0);
       soft_rect_vert(&v[2], _params->ulx, _params->lry, shift, z, s0, t1);
    }
-   soft_draw_tri(&soft_target, &v[0], &v[1], &v[3], &pipe);
-   soft_draw_tri(&soft_target, &v[0], &v[3], &v[2], &pipe);
+   soft_record_tri(&v[0], &v[1], &v[3], &pipe);
+   soft_record_tri(&v[0], &v[3], &v[2], &pipe);
 }
 
 void OGL_ClearDepthBuffer(bool _fullsize)
 {
-   memset(soft_depth, 0xff, sizeof(soft_depth));
+   if (soft_queue_full(&soft_queue))
+      soft_flush();
+   soft_queue_clear_depth(&soft_queue);
 }
 
 void OGL_ClearColorBuffer(float *color)
 {
-   uint16_t c = soft_pack565(color);
-   int i;
-   for (i = 0; i < SOFT_WIDTH * SOFT_HEIGHT; i++)
-      soft_color[i] = c;
+   if (soft_queue_full(&soft_queue))
+      soft_flush();
+   soft_queue_clear_color(&soft_queue, soft_pack565(color));
+}
+
+void soft_ogl_stop(void)
+{
+   soft_mt_stop();
+   soft_queue_reset(&soft_queue);
+   soft_texcache_unpin_all();
 }
 
 void OGL_SwapBuffers(void)
@@ -446,6 +477,7 @@ void OGL_SwapBuffers(void)
 
    if (renderCallback)
       (*renderCallback)();
+   soft_flush();
    soft_present();
    retro_return(true);
 
