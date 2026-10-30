@@ -184,16 +184,16 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       if (uses_tex)
       {
          int si = s >> 16, ti = tt >> 16, i;
-         uint16_t texel;
+         uint32_t texel;
          if (pow2)
             i = (ti & mt) * tex->w + (si & ms);
          else
             i = wrap_texel(ti, tex->h, tex->wrap_t) * tex->w + wrap_texel(si, tex->w, tex->wrap_s);
-         texel = tex->rgb[i];
-         tx[0] = ((texel >> 11) & 0x1f) << 3 | ((texel >> 13) & 7);
-         tx[1] = ((texel >> 5) & 0x3f) << 2 | ((texel >> 9) & 3);
-         tx[2] = (texel & 0x1f) << 3 | ((texel >> 2) & 7);
-         tx[3] = tex->a[i];
+         texel = tex->rgba[i];
+         tx[0] = texel & 0xff;
+         tx[1] = (texel >> 8) & 0xff;
+         tx[2] = (texel >> 16) & 0xff;
+         tx[3] = texel >> 24;
       }
 
       switch (mode)

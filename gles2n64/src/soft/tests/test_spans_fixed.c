@@ -13,6 +13,7 @@
 
 static uint16_t col_s[W], col_n[W], dep_s[W], dep_n[W];
 static uint16_t tex_rgb[TW * TW];
+static uint32_t tex_rgba[TW * TW];
 static uint8_t tex_a[TW * TW];
 
 static uint32_t seed = 12345;
@@ -64,6 +65,8 @@ static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_lim
    }
    tex.rgb = tex_rgb; tex.a = tex_a; tex.w = TW; tex.h = TW;
    tex.mask_s = TW - 1; tex.mask_t = TW - 1;
+   tex.rgba = tex_rgba;
+   soft_tex_expand(&tex);
 
    for (span = 0; span < 1000; span++)
    {
