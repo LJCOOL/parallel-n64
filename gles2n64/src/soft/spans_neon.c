@@ -173,7 +173,7 @@ void soft_span_combine_neon(const SoftTarget *t, const SoftPipe *p,
    float32x4_t k = vld1q_f32(lane);
    const float32x4_t four = vdupq_n_f32(4.0f);
    SoftCombineInputs in;
-   int fast = prog->mode <= SC_TEX_MUL_ENV, x;
+   int fast = prog->mode <= SC_TEX_MUL_ENV && prog->amode == SA_SAME, x;
 
    soft_pixel_inputs(p, &in);
    soft_stats_count_path(!fast, x1 - x0);

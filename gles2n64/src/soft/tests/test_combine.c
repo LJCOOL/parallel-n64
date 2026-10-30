@@ -49,6 +49,63 @@ static void test_two_cycle_passthrough_uses_first_cycle(void)
    CHECK(prog.cycles == 2);
 }
 
+static void test_alpha_source_splits_from_colour(void)
+{
+   SoftCombineProgram prog;
+   DecodedMux m = mux_of(TEXEL0, ZERO, SHADE, ZERO, ZERO, ZERO, ZERO, SHADE_ALPHA);
+   soft_combine_compile(&m, 0, &prog);
+   CHECK(prog.mode == SC_TEX_MUL_SHADE && prog.amode == SA_SHADE);
+   CHECK(prog.sel[0][1][3] == SHADE_ALPHA);
+
+   m = mux_of(ZERO, ZERO, ZERO, SHADE, ZERO, ZERO, ZERO, ENV_ALPHA);
+   soft_combine_compile(&m, 0, &prog);
+   CHECK(prog.mode == SC_SHADE && prog.amode == SA_ENV);
+
+   m = mux_of(ZERO, ZERO, ZERO, TEXEL0, TEXEL0_ALPHA, ZERO, ENV_ALPHA, ZERO);
+   soft_combine_compile(&m, 0, &prog);
+   CHECK(prog.mode == SC_TEX && prog.amode == SA_TEX_MUL_ENV);
+
+   m = mux_of(TEXEL0, ZERO, SHADE, ZERO, TEXEL0_ALPHA, ZERO, SHADE_ALPHA, ZERO);
+   soft_combine_compile(&m, 0, &prog);
+   CHECK(prog.mode == SC_TEX_MUL_SHADE && prog.amode == SA_SAME);
+
+   /* Alpha outside the fast set keeps the generic program. */
+   m = mux_of(TEXEL0, ZERO, SHADE, ZERO, PRIMITIVE_ALPHA, SHADE_ALPHA, TEXEL0_ALPHA, SHADE_ALPHA);
+   soft_combine_compile(&m, 0, &prog);
+   CHECK(prog.mode == SC_GENERIC);
+}
+
+static void test_eval_alpha_modes_match_generic(void)
+{
+   SoftCombineProgram prog;
+   SoftCombineInputs in;
+   DecodedMux m;
+   static const int asel[][4] = {
+      { ZERO, ZERO, ZERO, SHADE_ALPHA }, { ZERO, ZERO, ZERO, ENV_ALPHA },
+      { ZERO, ZERO, ZERO, PRIMITIVE_ALPHA }, { ZERO, ZERO, ZERO, TEXEL0_ALPHA },
+      { TEXEL0_ALPHA, ZERO, SHADE_ALPHA, ZERO }, { TEXEL0_ALPHA, ZERO, ENV_ALPHA, ZERO },
+      { TEXEL0_ALPHA, ZERO, PRIMITIVE_ALPHA, ZERO } };
+   int i, v;
+
+   memset(&in, 0, sizeof(in));
+   in.prog = &prog;
+   for (i = 0; i < 7; i++)
+      for (v = 0; v < 256; v += 5)
+      {
+         uint32_t fast, ref;
+         m = mux_of(TEXEL0, ZERO, SHADE, ZERO, asel[i][0], asel[i][1], asel[i][2], asel[i][3]);
+         soft_combine_compile(&m, 0, &prog);
+         CHECK(prog.mode == SC_TEX_MUL_SHADE && (prog.amode != SA_SAME) == (i != 4));
+         in.tex0[3] = (uint8_t)v; in.shade[3] = (uint8_t)(255 - v);
+         in.env[3] = (uint8_t)(v * 7); in.prim[3] = (uint8_t)(v * 3);
+         fast = soft_combine_eval(&in);
+         prog.mode = SC_GENERIC;
+         ref = soft_combine_generic(&in);
+         /* Products round like the fast colour path: within one step of generic. */
+         CHECK((int)(fast >> 24) - (int)(ref >> 24) <= 1 && (int)(ref >> 24) - (int)(fast >> 24) <= 1);
+      }
+}
+
 static void test_unknown_mode_falls_back(void)
 {
    DecodedMux m = mux_of(NOISE, ZERO, SHADE, ZERO, ZERO, ZERO, ZERO, SHADE_ALPHA);
@@ -96,6 +153,8 @@ static void test_fog_blend(void)
 int main(void)
 {
    RUN(test_classify_tex_mul_shade);
+   RUN(test_alpha_source_splits_from_colour);
+   RUN(test_eval_alpha_modes_match_generic);
    RUN(test_unknown_mode_falls_back);
    RUN(test_generic_matches_formula);
    RUN(test_alpha_cutout);

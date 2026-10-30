@@ -20,6 +20,20 @@ typedef enum
    SC_GENERIC
 } SoftCombineMode;
 
+/* Alpha source when it differs from the colour mode; SA_SAME follows the colour mode. */
+typedef enum
+{
+   SA_SAME,
+   SA_SHADE,
+   SA_ENV,
+   SA_PRIM,
+   SA_TEX,
+   SA_TEX_MUL_SHADE,
+   SA_TEX_MUL_ENV,
+   SA_TEX_MUL_PRIM,
+   SA_COUNT
+} SoftAlphaMode;
+
 typedef enum
 {
    SB_OPAQUE,
@@ -36,6 +50,7 @@ typedef struct
    int cycles;
    SoftCombineMode mode;
    int uses_tex, uses_shade;
+   SoftAlphaMode amode;
 } SoftCombineProgram;
 
 /* Per-pixel inputs; colours are R, G, B, A bytes. */
