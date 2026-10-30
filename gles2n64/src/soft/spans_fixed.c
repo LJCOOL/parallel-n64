@@ -270,13 +270,19 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       const SoftTri *tri, int y, int x0, int x1)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
+   /* Alpha following the colour mode gets its own loop; split alpha is chosen per pixel. */
+#define MODE(m) case m: \
+      if (prog->amode == SA_SAME) span_mode(t, p, tri, y, x0, x1, m, SA_SAME); \
+      else span_mode(t, p, tri, y, x0, x1, m, -1); \
+      break
    switch (prog->mode)
    {
-      case SC_SHADE:         span_mode(t, p, tri, y, x0, x1, SC_SHADE, -1); break;
-      case SC_TEX:           span_mode(t, p, tri, y, x0, x1, SC_TEX, -1); break;
-      case SC_TEX_MUL_SHADE: span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_SHADE, -1); break;
-      case SC_TEX_MUL_PRIM:  span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_PRIM, -1); break;
-      case SC_TEX_MUL_ENV:   span_mode(t, p, tri, y, x0, x1, SC_TEX_MUL_ENV, -1); break;
-      default:               span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME); break;
+      MODE(SC_SHADE);
+      MODE(SC_TEX);
+      MODE(SC_TEX_MUL_SHADE);
+      MODE(SC_TEX_MUL_PRIM);
+      MODE(SC_TEX_MUL_ENV);
+      default: span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME); break;
    }
+#undef MODE
 }
