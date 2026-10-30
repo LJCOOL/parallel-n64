@@ -21,6 +21,8 @@ enum
 void soft_stats_count_tri(void);
 void soft_stats_count_px(int n);
 void soft_stats_count_path(int generic, int n);
+/* Tallies generic-path pixels per combine program; prog is a SoftCombineProgram. */
+void soft_stats_count_program(const void *prog, int n);
 uint64_t soft_stats_now(void);
 void soft_stats_add(int stage, uint64_t start_ns);
 #define SOFT_TIME_BEGIN(v)      uint64_t v = soft_stats_now()
@@ -29,6 +31,7 @@ void soft_stats_add(int stage, uint64_t start_ns);
 #define soft_stats_count_tri()  ((void)0)
 #define soft_stats_count_px(n)  ((void)(n))
 #define soft_stats_count_path(g, n) ((void)(n))
+#define soft_stats_count_program(p, n) ((void)(n))
 #define SOFT_TIME_BEGIN(v)      ((void)0)
 #define SOFT_TIME_END(stage, v) ((void)0)
 #endif
