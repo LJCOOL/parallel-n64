@@ -6,7 +6,9 @@ extern "C" {
 
 #include <stdint.h>
 
+#ifndef PARALLEL_MAX_WORKERS
 #define PARALLEL_MAX_WORKERS 64u
+#endif
 
 void parallel_alinit(uint32_t num);
 

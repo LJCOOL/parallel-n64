@@ -905,6 +905,9 @@ static bool emu_step_load_data()
    if (disk_data != NULL && disk_size != 0)
    {
       /* 64DD Disk loading */
+#ifdef NO_64DD
+      goto load_fail;
+#endif
 
       loaded = true;
       if (!environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir) || !dir)
@@ -3402,7 +3405,9 @@ static void format_saved_memory(void)
                        DEFAULT_MEMPAK_VERSION);
       }
    }
+#ifndef NO_64DD
    format_disk(saved_memory.disk);
+#endif
 }
 
 /* Reads the content at 'path' into one malloc'd buffer: a zip or 7z is
