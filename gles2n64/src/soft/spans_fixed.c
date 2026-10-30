@@ -270,25 +270,6 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       const SoftTri *tri, int y, int x0, int x1)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
-   int key = prog->mode * SA_COUNT + prog->amode;
-
-   /* Dedicated loops for common colour and alpha pairs; others pick alpha per pixel. */
-#define PAIR(m, a) case (m) * SA_COUNT + (a): span_mode(t, p, tri, y, x0, x1, m, a); return
-   switch (key)
-   {
-      PAIR(SC_TEX_MUL_SHADE, SA_SAME);
-      PAIR(SC_TEX_MUL_SHADE, SA_SHADE);
-      PAIR(SC_TEX_MUL_SHADE, SA_ENV);
-      PAIR(SC_TEX_MUL_SHADE, SA_TEX);
-      PAIR(SC_TEX_MUL_SHADE, SA_TEX_MUL_ENV);
-      PAIR(SC_SHADE, SA_SAME);
-      PAIR(SC_SHADE, SA_ENV);
-      PAIR(SC_TEX, SA_SAME);
-      PAIR(SC_TEX, SA_SHADE);
-      PAIR(SC_TEX, SA_TEX_MUL_ENV);
-      default: break;
-   }
-#undef PAIR
    switch (prog->mode)
    {
       case SC_SHADE:         span_mode(t, p, tri, y, x0, x1, SC_SHADE, -1); break;
