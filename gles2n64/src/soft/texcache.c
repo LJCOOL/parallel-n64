@@ -11,6 +11,7 @@ typedef struct Entry
    SoftTex tex;
    SoftTexKey key;
    size_t bytes;
+   int pinned;                    /* used by commands not yet drawn */
    struct Entry *newer, *older;   /* LRU list, newest at head */
    struct Entry *next;            /* hash chain */
 } Entry;
@@ -82,6 +83,22 @@ void soft_texcache_init(size_t budget_bytes)
    used = 0;
 }
 
+void soft_texcache_unpin_all(void)
+{
+   Entry *e;
+   for (e = lru_head; e; e = e->older)
+      e->pinned = 0;
+}
+
+/* Oldest entry that no queued command still uses, or NULL. */
+static Entry *oldest_unpinned(void)
+{
+   Entry *e = lru_tail;
+   while (e && e->pinned)
+      e = e->newer;
+   return e;
+}
+
 size_t soft_texcache_bytes(void)
 {
    return used;
@@ -104,14 +121,20 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
       {
          lru_unlink(e);
          lru_push(e);
+         e->pinned = 1;
          return &e->tex;
       }
    }
 
    texels = (size_t)key->w * key->h;
    bytes  = sizeof(Entry) + texels * 7;
-   while (lru_tail && used + bytes > budget)
-      evict(lru_tail);
+   while (used + bytes > budget)
+   {
+      Entry *old = oldest_unpinned();
+      if (!old)
+         break;
+      evict(old);
+   }
 
    e = (Entry*)malloc(bytes);
    if (!e)
@@ -119,6 +142,7 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
    memset(e, 0, sizeof(Entry));
    e->key       = *key;
    e->bytes     = bytes;
+   e->pinned    = 1;
    e->tex.rgba  = (uint32_t*)(e + 1);
    e->tex.rgb   = (uint16_t*)(e->tex.rgba + texels);
    e->tex.a     = (uint8_t*)(e->tex.rgb + texels);
