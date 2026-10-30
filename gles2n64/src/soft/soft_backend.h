@@ -10,8 +10,8 @@ extern "C" {
 #define SOFT_WIDTH  160
 #define SOFT_HEIGHT 120
 
-/* The finished 160x120 RGB565 frame handed to video_cb. */
-const uint16_t *soft_frame(void);
+/* The finished 160x120 XRGB8888 frame handed to video_cb. */
+const uint32_t *soft_frame(void);
 
 /* Display-list timing, reported every SOFT_STATS_FRAMES frames. */
 void soft_stats_begin(void);
