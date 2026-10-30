@@ -75,7 +75,7 @@ uint8_t* g_dd_disk;
  * typedefs when one of the HAVE_OPENGLES* defines is set, while the headers
  * rglgen pulls in on iOS are ES ones that do not carry them. glsm.h alone is
  * enough here - the stub needs the enum and nothing else. */
-#include <glsm/glsm.h>
+#include <glsm/glsm_state_ctl.h>
 bool glsm_ctl(enum glsm_state_ctl state, void *data) { return false; }
 #endif
 
