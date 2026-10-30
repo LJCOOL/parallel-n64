@@ -149,9 +149,30 @@ static int uses(const SoftCombineProgram *p, int a, int b)
    return 0;
 }
 
+/* Logs raw selectors once per mux when a one-cycle program lands on the generic path. */
+static void log_generic(const DecodedMux *m, int two_cycle_in)
+{
+   char msg[160];
+   int i;
+   uint64_t key = m->combine.mux ^ 0x8000000000000000ull;
+   for (i = 0; i < logged_count; i++)
+      if (logged[i] == key)
+         return;
+   if (logged_count < SOFT_LOGGED_MAX)
+      logged[logged_count++] = key;
+   if (logger)
+   {
+      snprintf(msg, sizeof(msg), "soft: generic mux=%016llx 2cyc=%d c0=%d,%d,%d,%d a0=%d,%d,%d,%d\n",
+            (unsigned long long)m->combine.mux, two_cycle_in,
+            m->decode[0].sa, m->decode[0].sb, m->decode[0].m, m->decode[0].a,
+            m->decode[1].sa, m->decode[1].sb, m->decode[1].m, m->decode[1].a);
+      logger(msg);
+   }
+}
+
 void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram *out)
 {
-   int cy, k;
+   int cy, k, two_cycle_in = two_cycle;
    /* A second cycle that only passes COMBINED through adds nothing. */
    if (two_cycle && is_single(&m->decode[2], COMBINED) && is_single(&m->decode[3], COMBINED))
       two_cycle = 0;
@@ -173,6 +194,8 @@ void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram
       out->sel[0][0][0] = TEXEL0; out->sel[0][0][1] = ZERO; out->sel[0][0][2] = SHADE; out->sel[0][0][3] = ZERO;
       out->sel[0][1][0] = TEXEL0; out->sel[0][1][1] = ZERO; out->sel[0][1][2] = SHADE; out->sel[0][1][3] = ZERO;
    }
+   if (out->mode == SC_GENERIC && out->cycles == 1)
+      log_generic(m, two_cycle_in);
    out->uses_tex   = uses(out, TEXEL0, TEXEL1);
    out->uses_shade = uses(out, SHADE, SHADE);
 }
