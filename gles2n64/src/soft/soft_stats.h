@@ -16,8 +16,15 @@ enum
    SOFT_T_COUNT
 };
 
+/* Zeroes the triangle, pixel, path and program counters. */
+void soft_stats_reset_counts(void);
+
 #ifdef SOFT_STATS
 #include <stdint.h>
+/* Selects which thread's counter set this thread updates (0 or 1). */
+void soft_stats_set_lane(int lane);
+/* Pixel total over both lanes, for tests. */
+uint64_t soft_stats_pixels(void);
 void soft_stats_count_tri(void);
 void soft_stats_count_px(int n);
 void soft_stats_count_path(int generic, int n);
@@ -28,6 +35,7 @@ void soft_stats_add(int stage, uint64_t start_ns);
 #define SOFT_TIME_BEGIN(v)      uint64_t v = soft_stats_now()
 #define SOFT_TIME_END(stage, v) soft_stats_add(stage, v)
 #else
+#define soft_stats_set_lane(l)  ((void)(l))
 #define soft_stats_count_tri()  ((void)0)
 #define soft_stats_count_px(n)  ((void)(n))
 #define soft_stats_count_path(g, n) ((void)(n))

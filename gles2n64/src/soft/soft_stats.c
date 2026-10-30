@@ -12,7 +12,8 @@
 static uint64_t dl_start_ns;
 static uint64_t dl_total_ns;
 static unsigned frames;
-static uint64_t tris, pixels;
+static uint64_t tris[2], pixels[2];
+static __thread int lane;
 static uint64_t stage_ns[SOFT_T_COUNT];
 static unsigned busy_frames;
 static int dl_this_frame;
@@ -35,14 +36,24 @@ void soft_stats_add(int stage, uint64_t start_ns)
    stage_ns[stage] += now_ns() - start_ns;
 }
 
+void soft_stats_set_lane(int l)
+{
+   lane = l;
+}
+
 void soft_stats_count_tri(void)
 {
-   tris++;
+   tris[lane]++;
 }
 
 void soft_stats_count_px(int n)
 {
-   pixels += (uint64_t)n;
+   pixels[lane] += (uint64_t)n;
+}
+
+uint64_t soft_stats_pixels(void)
+{
+   return pixels[0] + pixels[1];
 }
 #endif
 
@@ -58,7 +69,7 @@ void soft_stats_end(void)
    dl_this_frame = 1;
 }
 
-static uint64_t span_px[2];
+static uint64_t span_px[2][2];
 
 #define PROG_SLOTS 64
 
@@ -69,35 +80,51 @@ typedef struct
    uint64_t px;
 } ProgCount;
 
-static ProgCount progs[PROG_SLOTS];
-static int prog_used;
-static uint64_t prog_other_px;
+static ProgCount progs[2][PROG_SLOTS];
+static int prog_used[2];
+static uint64_t prog_other_px[2];
 
 #ifdef SOFT_STATS
 void soft_stats_count_path(int generic, int n)
 {
-   span_px[generic != 0] += (uint64_t)n;
+   span_px[lane][generic != 0] += (uint64_t)n;
+}
+
+static void count_program(int l, const uint8_t sel[2][2][4], int cycles, uint64_t n)
+{
+   int i;
+   for (i = 0; i < prog_used[l]; i++)
+      if (progs[l][i].cycles == cycles && !memcmp(progs[l][i].sel, sel, sizeof(progs[l][i].sel)))
+      {
+         progs[l][i].px += n;
+         return;
+      }
+   if (prog_used[l] == PROG_SLOTS)
+   {
+      prog_other_px[l] += n;
+      return;
+   }
+   memcpy(progs[l][prog_used[l]].sel, sel, sizeof(progs[l][i].sel));
+   progs[l][prog_used[l]].cycles = cycles;
+   progs[l][prog_used[l]].px = n;
+   prog_used[l]++;
 }
 
 void soft_stats_count_program(const void *prog, int n)
 {
    const SoftCombineProgram *c = (const SoftCombineProgram*)prog;
+   count_program(lane, c->sel, c->cycles, (uint64_t)n);
+}
+
+/* Folds lane 1's program counts into lane 0 before reporting. */
+static void merge_programs(void)
+{
    int i;
-   for (i = 0; i < prog_used; i++)
-      if (progs[i].cycles == c->cycles && !memcmp(progs[i].sel, c->sel, sizeof(c->sel)))
-      {
-         progs[i].px += (uint64_t)n;
-         return;
-      }
-   if (prog_used == PROG_SLOTS)
-   {
-      prog_other_px += (uint64_t)n;
-      return;
-   }
-   memcpy(progs[prog_used].sel, c->sel, sizeof(c->sel));
-   progs[prog_used].cycles = c->cycles;
-   progs[prog_used].px = (uint64_t)n;
-   prog_used++;
+   for (i = 0; i < prog_used[1]; i++)
+      count_program(0, progs[1][i].sel, progs[1][i].cycles, progs[1][i].px);
+   prog_other_px[0] += prog_other_px[1];
+   prog_used[1] = 0;
+   prog_other_px[1] = 0;
 }
 
 static const char *sel_name(int v)
@@ -112,30 +139,31 @@ static const char *sel_name(int v)
 static void log_programs(double busy)
 {
    int shown, i, best, cy, ch;
+   merge_programs();
    for (shown = 0; shown < 10; shown++)
    {
       char line[256];
       int len;
       best = -1;
-      for (i = 0; i < prog_used; i++)
-         if (progs[i].px && (best < 0 || progs[i].px > progs[best].px))
+      for (i = 0; i < prog_used[0]; i++)
+         if (progs[0][i].px && (best < 0 || progs[0][i].px > progs[0][best].px))
             best = i;
       if (best < 0)
          break;
       len = snprintf(line, sizeof(line), "soft: generic #%d %.0f px/busy frame:", shown + 1,
-            progs[best].px / busy);
-      for (cy = 0; cy < progs[best].cycles; cy++)
+            progs[0][best].px / busy);
+      for (cy = 0; cy < progs[0][best].cycles; cy++)
          for (ch = 0; ch < 2; ch++)
          {
-            const uint8_t *q = progs[best].sel[cy][ch];
+            const uint8_t *q = progs[0][best].sel[cy][ch];
             len += snprintf(line + len, sizeof(line) - len, " c%d%s (%s-%s)*%s+%s", cy,
                   ch ? "a" : "rgb", sel_name(q[0]), sel_name(q[1]), sel_name(q[2]), sel_name(q[3]));
          }
       log_cb(RETRO_LOG_INFO, "%s\n", line);
-      progs[best].px = 0;
+      progs[0][best].px = 0;
    }
-   if (prog_other_px)
-      log_cb(RETRO_LOG_INFO, "soft: generic untracked %.0f px/busy frame\n", prog_other_px / busy);
+   if (prog_other_px[0])
+      log_cb(RETRO_LOG_INFO, "soft: generic untracked %.0f px/busy frame\n", prog_other_px[0] / busy);
 }
 
 /* Times synthetic full-screen draws, small triangles and the clock itself on this CPU. */
@@ -207,6 +235,15 @@ static void calibrate(void)
 }
 #endif
 
+void soft_stats_reset_counts(void)
+{
+   memset(tris, 0, sizeof(tris));
+   memset(pixels, 0, sizeof(pixels));
+   memset(span_px, 0, sizeof(span_px));
+   memset(prog_used, 0, sizeof(prog_used));
+   memset(prog_other_px, 0, sizeof(prog_other_px));
+}
+
 void soft_stats_frame(void)
 {
 #ifdef SOFT_STATS
@@ -216,7 +253,7 @@ void soft_stats_frame(void)
       calibrated = 1;
       calibrate();
       memset(stage_ns, 0, sizeof(stage_ns));
-      tris = pixels = 0;
+      soft_stats_reset_counts();
    }
 #endif
 
@@ -229,7 +266,7 @@ void soft_stats_frame(void)
       log_cb(RETRO_LOG_INFO, "soft: dl mean %.2f ms over %u frames, tex %u KB, tris %u/frame, px %u/frame\n",
             (double)dl_total_ns / 1e6 / frames, frames,
             (unsigned)(soft_texcache_bytes() / 1024),
-            (unsigned)(tris / frames), (unsigned)(pixels / frames));
+            (unsigned)((tris[0] + tris[1]) / frames), (unsigned)((pixels[0] + pixels[1]) / frames));
    if (log_cb && busy_frames)
    {
       double b = (double)busy_frames * 1e6;
@@ -238,18 +275,15 @@ void soft_stats_frame(void)
             stage_ns[SOFT_T_TEXCRC] / b, stage_ns[SOFT_T_DECODE] / b,
             stage_ns[SOFT_T_RASTER] / b, stage_ns[SOFT_T_PRESENT] / b);
       log_cb(RETRO_LOG_INFO, "soft: span px per busy frame: fast %.0f generic %.0f\n",
-            span_px[0] / (double)busy_frames, span_px[1] / (double)busy_frames);
+            (span_px[0][0] + span_px[1][0]) / (double)busy_frames,
+            (span_px[0][1] + span_px[1][1]) / (double)busy_frames);
 #ifdef SOFT_STATS
       log_programs((double)busy_frames);
 #endif
    }
-   prog_used = 0;
-   prog_other_px = 0;
-   span_px[0] = span_px[1] = 0;
+   soft_stats_reset_counts();
    memset(stage_ns, 0, sizeof(stage_ns));
    busy_frames = 0;
    dl_total_ns = 0;
-   tris        = 0;
-   pixels      = 0;
    frames      = 0;
 }

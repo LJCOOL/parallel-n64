@@ -9,9 +9,14 @@ all: $(addprefix $(BUILD)/,$(TESTS))
 	@for t in $^; do ./$$t || exit 1; done
 	@echo "all tests passed"
 
-$(BUILD)/%: %.c $(SRCS) test.h $(wildcard ../*.h)
+$(BUILD)/%: %.c $(SRCS) test.h gen_cmds.h $(wildcard ../*.h)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(SRCS) -lm
+
+# The thread test also covers stats lanes, so it links the stats module.
+$(BUILD)/test_soft_mt: test_soft_mt.c $(SRCS) ../soft_mt.c ../soft_stats.c test.h gen_cmds.h $(wildcard ../*.h)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -DSOFT_STATS -o $@ $< $(SRCS) ../soft_mt.c ../soft_stats.c -lm -lpthread
 
 clean:
 	rm -rf $(BUILD)
