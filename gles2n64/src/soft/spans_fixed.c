@@ -150,6 +150,8 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    }
 
    soft_stats_count_path(mode == SC_GENERIC, x1 - x0);
+   if (mode == SC_GENERIC)
+      soft_stats_count_program(prog, x1 - x0);
 
    for (x = x0; x < x1; x++)
    {

@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -59,10 +60,82 @@ void soft_stats_end(void)
 
 static uint64_t span_px[2];
 
+#define PROG_SLOTS 64
+
+typedef struct
+{
+   uint8_t sel[2][2][4];
+   int cycles;
+   uint64_t px;
+} ProgCount;
+
+static ProgCount progs[PROG_SLOTS];
+static int prog_used;
+static uint64_t prog_other_px;
+
 #ifdef SOFT_STATS
 void soft_stats_count_path(int generic, int n)
 {
    span_px[generic != 0] += (uint64_t)n;
+}
+
+void soft_stats_count_program(const void *prog, int n)
+{
+   const SoftCombineProgram *c = (const SoftCombineProgram*)prog;
+   int i;
+   for (i = 0; i < prog_used; i++)
+      if (progs[i].cycles == c->cycles && !memcmp(progs[i].sel, c->sel, sizeof(c->sel)))
+      {
+         progs[i].px += (uint64_t)n;
+         return;
+      }
+   if (prog_used == PROG_SLOTS)
+   {
+      prog_other_px += (uint64_t)n;
+      return;
+   }
+   memcpy(progs[prog_used].sel, c->sel, sizeof(c->sel));
+   progs[prog_used].cycles = c->cycles;
+   progs[prog_used].px = (uint64_t)n;
+   prog_used++;
+}
+
+static const char *sel_name(int v)
+{
+   static const char *names[] = { "COMB", "T0", "T1", "PRIM", "SHADE", "ENV", "CENTER", "SCALE",
+      "COMB_A", "T0_A", "T1_A", "PRIM_A", "SHADE_A", "ENV_A", "LOD", "PRIM_LOD", "NOISE",
+      "K4", "K5", "1", "0" };
+   return v < (int)(sizeof(names) / sizeof(names[0])) ? names[v] : "?";
+}
+
+/* Logs the busiest generic programs as (A-B)*C+D per cycle, colour then alpha. */
+static void log_programs(double busy)
+{
+   int shown, i, best, cy, ch;
+   for (shown = 0; shown < 10; shown++)
+   {
+      char line[256];
+      int len;
+      best = -1;
+      for (i = 0; i < prog_used; i++)
+         if (progs[i].px && (best < 0 || progs[i].px > progs[best].px))
+            best = i;
+      if (best < 0)
+         break;
+      len = snprintf(line, sizeof(line), "soft: generic #%d %.0f px/busy frame:", shown + 1,
+            progs[best].px / busy);
+      for (cy = 0; cy < progs[best].cycles; cy++)
+         for (ch = 0; ch < 2; ch++)
+         {
+            const uint8_t *q = progs[best].sel[cy][ch];
+            len += snprintf(line + len, sizeof(line) - len, " c%d%s (%s-%s)*%s+%s", cy,
+                  ch ? "a" : "rgb", sel_name(q[0]), sel_name(q[1]), sel_name(q[2]), sel_name(q[3]));
+         }
+      log_cb(RETRO_LOG_INFO, "%s\n", line);
+      progs[best].px = 0;
+   }
+   if (prog_other_px)
+      log_cb(RETRO_LOG_INFO, "soft: generic untracked %.0f px/busy frame\n", prog_other_px / busy);
 }
 
 /* Times synthetic full-screen draws, small triangles and the clock itself on this CPU. */
@@ -166,7 +239,12 @@ void soft_stats_frame(void)
             stage_ns[SOFT_T_RASTER] / b, stage_ns[SOFT_T_PRESENT] / b);
       log_cb(RETRO_LOG_INFO, "soft: span px per busy frame: fast %.0f generic %.0f\n",
             span_px[0] / (double)busy_frames, span_px[1] / (double)busy_frames);
+#ifdef SOFT_STATS
+      log_programs((double)busy_frames);
+#endif
    }
+   prog_used = 0;
+   prog_other_px = 0;
    span_px[0] = span_px[1] = 0;
    memset(stage_ns, 0, sizeof(stage_ns));
    busy_frames = 0;
