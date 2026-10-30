@@ -78,8 +78,36 @@ static void test_cache_evicts_under_budget(void)
    {
       SoftTexKey k = key(i + 1, 64, 32);
       CHECK(soft_texcache_lookup(&k, 0x200000, decode_fill, NULL) != NULL);
+      soft_texcache_unpin_all();
       CHECK(soft_texcache_bytes() <= 65536);
    }
+}
+
+static void test_pinned_entries_survive_eviction(void)
+{
+   SoftTexKey a = key(1000, 64, 32);
+   const SoftTex *ta;
+   uint32_t i;
+   int before;
+
+   soft_texcache_init(64 * 1024);
+   ta = soft_texcache_lookup(&a, 0x200000, decode_fill, NULL);
+   for (i = 0; i < 40; i++)
+   {
+      SoftTexKey k = key(2000 + i, 64, 32);
+      soft_texcache_lookup(&k, 0x200000, decode_fill, NULL);
+   }
+   before = decodes;
+   CHECK(soft_texcache_lookup(&a, 0x200000, decode_fill, NULL) == ta);
+   CHECK(decodes == before);
+   soft_texcache_unpin_all();
+   for (i = 0; i < 40; i++)
+   {
+      SoftTexKey k = key(3000 + i, 64, 32);
+      soft_texcache_lookup(&k, 0x200000, decode_fill, NULL);
+      soft_texcache_unpin_all();
+   }
+   CHECK(soft_texcache_bytes() <= 65536);
 }
 
 static void test_framebuffer_texture_uses_dummy(void)
@@ -102,6 +130,7 @@ int main(void)
    RUN(test_expand_replicates_bits_and_alpha);
    RUN(test_cache_fills_rgba);
    RUN(test_cache_evicts_under_budget);
+   RUN(test_pinned_entries_survive_eviction);
    RUN(test_framebuffer_texture_uses_dummy);
    TEST_EXIT();
 }

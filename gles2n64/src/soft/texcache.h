@@ -47,6 +47,9 @@ size_t soft_texcache_bytes(void);
 const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_address,
       SoftTexDecodeFn decode, void *ctx);
 
+/* Releases every entry for eviction; call after the commands using them are drawn. */
+void soft_texcache_unpin_all(void);
+
 /* Looks up the texture for tile 0 or 1 from current RDP state. */
 const SoftTex *soft_texcache_get(uint32_t tile);
 
