@@ -83,6 +83,13 @@ void soft_texcache_init(size_t budget_bytes)
    used = 0;
 }
 
+void soft_texcache_release(void)
+{
+   soft_texcache_unpin_all();
+   while (lru_tail)
+      evict(lru_tail);
+}
+
 void soft_texcache_unpin_all(void)
 {
    Entry *e;
