@@ -128,6 +128,7 @@ void* g_mem_base = NULL;
 uint32_t g_start_address = UINT32_C(0xa4000040);
 
 struct device g_dev;
+int (*g_cart_map_swapped)(uint8_t* cart, size_t size) = NULL;
 
 m64p_media_loader g_media_loader;
 
@@ -890,7 +891,10 @@ m64p_error main_run(void)
 #if !defined(MSB_FIRST)
     if (g_RomWordsLittleEndian == 0)
     {
-        swap_buffer((uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM), 4, g_rom_size/4);
+        uint8_t* cart = (uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM);
+        /* A frontend may map an already swapped copy, keeping the ROM as clean, reclaimable pages. */
+        if (!g_cart_map_swapped || g_cart_map_swapped(cart, g_rom_size) != 0)
+            swap_buffer(cart, 4, g_rom_size/4);
         g_RomWordsLittleEndian = 1;
     }
 #endif

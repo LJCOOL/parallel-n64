@@ -145,7 +145,9 @@ static void swap_copy_rom(void* dst, const void* src, size_t len, unsigned char*
     }
     else {
         *imagetype = Z64IMAGE;
-        memcpy(dst, src, len);
+        /* A ROM read straight into cartridge memory is already in place. */
+        if (dst != src)
+            memcpy(dst, src, len);
     }
 }
 

@@ -21,6 +21,11 @@
 
 #include "m64p_memory.h"
 
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 #include "api/callbacks.h"
 #include "api/m64p_types.h"
 
@@ -256,7 +261,14 @@ void* init_mem_base(void)
 #endif
     if (mem_base == NULL) {
         /* if it failed, try the compressed mem base alloc */
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+        /* Mapped directly so the cartridge area is page aligned and can map a ROM file. */
+        mem_base = mmap(NULL, MB_MAX_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mem_base == MAP_FAILED)
+            mem_base = NULL;
+#else
         mem_base = malloc(MB_MAX_SIZE);
+#endif
         if (mem_base != NULL) {
             /* Compressed mem base mode has LSB = 1 */
             assert(MEM_BASE_MODE(mem_base) == 0);
@@ -279,8 +291,31 @@ void release_mem_base(void* mem_base)
     if (MEM_BASE_MODE(mem_base) == 0)
         _aligned_free(MEM_BASE_PTR(mem_base));
     else
+#elif !defined(HAVE_LIBNX)
+    if (MEM_BASE_MODE(mem_base) == 1)
+        munmap(MEM_BASE_PTR(mem_base), MB_MAX_SIZE);
+    else
 #endif
         free(MEM_BASE_PTR(mem_base));
+}
+
+int mem_base_map_cart_file(void* mem_base, int fd, size_t size)
+{
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+    /* Clean file pages can be dropped and re-read under memory pressure; writes stay private. */
+    uint8_t* cart = (uint8_t*)mem_base_u32(mem_base, MM_CART_ROM);
+    long page = sysconf(_SC_PAGESIZE);
+
+    if (MEM_BASE_MODE(mem_base) != 1 || page <= 0 || ((uintptr_t)cart & (uintptr_t)(page - 1))
+            || size == 0 || size > CART_ROM_MAX_SIZE)
+        return -1;
+    if (mmap(cart, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, fd, 0) == MAP_FAILED)
+        return -1;
+    return 0;
+#else
+    (void)mem_base; (void)fd; (void)size;
+    return -1;
+#endif
 }
 
 uint32_t* mem_base_u32(void* mem_base, uint32_t address)

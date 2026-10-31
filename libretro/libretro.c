@@ -26,6 +26,11 @@ uint8_t* g_dd_disk;
 
 #include <libretro.h>
 #include <streams/file_stream.h>
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
 #include <file/file_path.h>
 #include <retro_miscellaneous.h>
 
@@ -52,6 +57,7 @@ uint8_t* g_dd_disk;
 #include "device/pif/pif.h"
 #include "device/pif/cic.h"
 #include "main/rom.h"
+#include "main/util.h"
 #include "libretro_memory.h"
 #include "libretro_core_options.h"
 
@@ -285,6 +291,16 @@ static bool frame_latched                 = false; /* a renderer finished a fram
 
 static uint8_t* cart_data           = NULL;
 static uint32_t cart_size           = 0;
+/* cart_data points into the core's cartridge memory rather than a malloc'd copy. */
+static bool     cart_in_place       = false;
+
+static void release_cart_data(void)
+{
+   if (!cart_in_place)
+      free(cart_data);
+   cart_data     = NULL;
+   cart_in_place = false;
+}
 static uint8_t* disk_data           = NULL;
 static uint32_t disk_size           = 0;
 /* Set from the 64DD Hardware core option, read at content load. */
@@ -869,7 +885,7 @@ static bool emu_step_load_data()
       slash = '/';
    #endif
 
-   if(CoreStartup(FRONTEND_API_VERSION, ".", ".", "Core", n64DebugCallback, 0, 0) && log_cb)
+   if(!cart_in_place && CoreStartup(FRONTEND_API_VERSION, ".", ".", "Core", n64DebugCallback, 0, 0) && log_cb)
        log_cb(RETRO_LOG_ERROR, "mupen64plus: Failed to initialize core\n");
 
    if (cart_data != NULL && cart_size != 0)
@@ -898,8 +914,7 @@ static bool emu_step_load_data()
       }
 #endif
 
-      free(cart_data);
-      cart_data = NULL;
+      release_cart_data();
 
       if (log_cb)
          log_cb(RETRO_LOG_INFO, "EmuThread: M64CMD_ROM_GET_HEADER\n");
@@ -995,8 +1010,7 @@ static bool emu_step_load_data()
    return loaded;
 
 load_fail:
-   free(cart_data);
-   cart_data = NULL;
+   release_cart_data();
    free(disk_data);
    disk_data = NULL;
    mupencorestop = 1;
@@ -3514,8 +3528,132 @@ done:
    return ret;
 }
 
+/* Maps a native-order (z64) dump over the cartridge memory, keeping it reclaimable page cache. */
+static bool map_cart_file(const char* path, size_t size)
+{
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+   int fd = open(path, O_RDONLY);
+   bool ok;
+
+   if (fd < 0)
+      return false;
+   ok = mem_base_map_cart_file(g_mem_base, fd, size) == 0;
+   close(fd);
+   if (ok && log_cb)
+      log_cb(RETRO_LOG_INFO, "mupen64plus: cartridge mapped from file (%u bytes)\n", (unsigned)size);
+   return ok;
+#else
+   (void)path; (void)size;
+   return false;
+#endif
+}
+
+/* Maps <save dir>/romcache/<md5>.le, a word-swapped copy of the ROM written on first use.
+ * Cart writes stay private copies; the mapped pages stay clean and reclaimable. */
+static int map_cart_swapped(uint8_t* cart, size_t size)
+{
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+   const char* save_dir = NULL;
+   char        dir[1024], path[1100], tmp[1110];
+   struct stat st;
+   int         fd, ok;
+
+   if (!environ_cb || !environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_dir)
+         || !save_dir || strlen(ROM_SETTINGS.MD5) != 32 || (size & 3))
+      return -1;
+   snprintf(dir, sizeof(dir), "%s/romcache", save_dir);
+   mkdir(dir, 0755);
+   snprintf(path, sizeof(path), "%s/%s.le", dir, ROM_SETTINGS.MD5);
+
+   fd = open(path, O_RDONLY);
+   if (fd >= 0 && (fstat(fd, &st) != 0 || (size_t)st.st_size != size))
+   {
+      close(fd);
+      fd = -1;
+   }
+   if (fd < 0)
+   {
+      uint32_t chunk[16384];
+      size_t   off, i;
+      int      out;
+
+      snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+      if ((out = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0)
+         return -1;
+      for (off = 0; off < size; off += sizeof(chunk))
+      {
+         size_t n = size - off < sizeof(chunk) ? size - off : sizeof(chunk);
+         memcpy(chunk, cart + off, n);
+         for (i = 0; i < n / 4; i++)
+            chunk[i] = m64p_swap32(chunk[i]);
+         if (write(out, chunk, n) != (ssize_t)n)
+            break;
+      }
+      ok = off >= size && fsync(out) == 0;
+      close(out);
+      if (!ok || rename(tmp, path) != 0)
+      {
+         unlink(tmp);
+         return -1;
+      }
+      if ((fd = open(path, O_RDONLY)) < 0)
+         return -1;
+   }
+   ok = mem_base_map_cart_file(g_mem_base, fd, size) == 0;
+   close(fd);
+   if (ok && log_cb)
+      log_cb(RETRO_LOG_INFO, "mupen64plus: swapped cartridge mapped from %s\n", path);
+   return ok ? 0 : -1;
+#else
+   (void)cart; (void)size;
+   return -1;
+#endif
+}
+
+/* Reads a plain cartridge dump straight into the core's cartridge memory, so loading
+ * never holds a second copy of the ROM; archives and disks return false. */
+static bool load_cart_in_place(const char* path, uint8_t** out, size_t* out_size)
+{
+   uint8_t  head[8];
+   uint32_t magic;
+   uint8_t* dst;
+   int64_t  size;
+   bool     ret = false;
+   RFILE*   fp  = filestream_open(path, RETRO_VFS_FILE_ACCESS_READ,
+         RETRO_VFS_FILE_ACCESS_HINT_NONE);
+
+   if (!fp)
+      return false;
+   size = filestream_get_size(fp);
+   if (size < (int64_t)sizeof(head) || size > CART_ROM_MAX_SIZE
+         || filestream_read(fp, head, sizeof(head)) != sizeof(head))
+      goto done;
+   memcpy(&magic, head, sizeof(magic));
+   if (magic != 0x40123780 && magic != 0x12408037 && magic != 0x80371240)
+      goto done;
+   if (CoreStartup(FRONTEND_API_VERSION, ".", ".", "Core", n64DebugCallback, 0, 0))
+      goto done;
+   dst = (uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM);
+   if (!(magic == 0x40123780 && map_cart_file(path, (size_t)size)))
+   {
+      memcpy(dst, head, sizeof(head));
+      if (filestream_read(fp, dst + sizeof(head), size - (int64_t)sizeof(head))
+            != size - (int64_t)sizeof(head))
+         goto done;
+   }
+   *out          = dst;
+   *out_size     = (size_t)size;
+   cart_in_place = true;
+   ret           = true;
+
+done:
+   filestream_close(fp);
+   return ret;
+}
+
 bool retro_load_game(const struct retro_game_info *game)
 {
+   g_cart_map_swapped = map_cart_swapped;
    format_saved_memory();
 
    if (!transfer_pak_from_subsystem)
@@ -3604,7 +3742,7 @@ bool retro_load_game(const struct retro_game_info *game)
             rom_size = game->size;
          }
       }
-      else if (game->path)
+      else if (game->path && !load_cart_in_place(game->path, &rom, &rom_size))
          load_content_path(game->path, &rom, &rom_size);
 
       if (!rom || rom_size < 4 || rom_size > 0xFFFFFFFFu)
@@ -3612,7 +3750,9 @@ bool retro_load_game(const struct retro_game_info *game)
          if (log_cb)
             log_cb(RETRO_LOG_ERROR, "Failed to load content: %s\n",
                   game->path ? game->path : "(in memory)");
-         free(rom);
+         if (!cart_in_place)
+            free(rom);
+         cart_in_place = false;
          return false;
       }
 
@@ -4058,7 +4198,11 @@ bool retro_serialize(void *data, size_t size)
 bool retro_unserialize(const void * data, size_t size)
 {
     if (initializing)
+    {
+       if (log_cb)
+          log_cb(RETRO_LOG_ERROR, "savestate: rejected before the first frame\n");
        return false;
+    }
 
     if (savestates_load_m64p(data, size))
     {
