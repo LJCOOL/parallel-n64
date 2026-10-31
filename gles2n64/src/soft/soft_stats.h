@@ -19,6 +19,13 @@ enum
    SOFT_T_COUNT
 };
 
+/* Reasons a span misses the tight fixed loop. */
+enum
+{
+   SOFT_MISS_BLEND, SOFT_MISS_FOG, SOFT_MISS_ALPHA_TEST, SOFT_MISS_SPLIT_ALPHA, SOFT_MISS_CLAMP,
+   SOFT_MISS_MIRROR, SOFT_MISS_NPOT, SOFT_MISS_UNTEXTURED, SOFT_MISS_GENERIC, SOFT_MISS_COUNT
+};
+
 /* Zeroes the triangle, pixel, path and program counters. */
 void soft_stats_reset_counts(void);
 
@@ -31,6 +38,8 @@ uint64_t soft_stats_pixels(void);
 void soft_stats_count_tri(void);
 void soft_stats_count_px(int n);
 void soft_stats_count_path(int generic, int n);
+/* Tallies span pixels by the SOFT_MISS_* bits that kept them off the tight loop; zero means taken. */
+void soft_stats_count_variant(unsigned miss, int n);
 /* Tallies generic-path pixels per combine program; prog is a SoftCombineProgram. */
 void soft_stats_count_program(const void *prog, int n);
 uint64_t soft_stats_now(void);
@@ -42,6 +51,7 @@ void soft_stats_add(int stage, uint64_t start_ns);
 #define soft_stats_count_tri()  ((void)0)
 #define soft_stats_count_px(n)  ((void)(n))
 #define soft_stats_count_path(g, n) ((void)(n))
+#define soft_stats_count_variant(m, n) ((void)(n))
 #define soft_stats_count_program(p, n) ((void)(n))
 #define SOFT_TIME_BEGIN(v)      ((void)0)
 #define SOFT_TIME_END(stage, v) ((void)0)

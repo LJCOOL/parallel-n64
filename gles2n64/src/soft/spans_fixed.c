@@ -302,6 +302,25 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
    if (simple && prog->uses_tex && tex->wrap_s == SOFT_WRAP && tex->wrap_t == SOFT_WRAP
          && !(tex->w & (tex->w - 1)) && !(tex->h & (tex->h - 1)))
       tk = p->filter ? TK_FILTER2 : TK_POINT2;
+#ifdef SOFT_STATS
+   {
+      unsigned miss = 0;
+      if (p->blend != SB_OPAQUE) miss |= 1u << SOFT_MISS_BLEND;
+      if (p->fog) miss |= 1u << SOFT_MISS_FOG;
+      if (p->alpha_test) miss |= 1u << SOFT_MISS_ALPHA_TEST;
+      if (prog->mode != SC_GENERIC && prog->amode != SA_SAME) miss |= 1u << SOFT_MISS_SPLIT_ALPHA;
+      if (prog->mode == SC_GENERIC) miss |= 1u << SOFT_MISS_GENERIC;
+      if (!prog->uses_tex)
+         miss |= 1u << SOFT_MISS_UNTEXTURED;
+      else
+      {
+         if (tex->wrap_s == SOFT_CLAMP || tex->wrap_t == SOFT_CLAMP) miss |= 1u << SOFT_MISS_CLAMP;
+         if (tex->wrap_s == SOFT_MIRROR || tex->wrap_t == SOFT_MIRROR) miss |= 1u << SOFT_MISS_MIRROR;
+         if ((tex->w & (tex->w - 1)) || (tex->h & (tex->h - 1))) miss |= 1u << SOFT_MISS_NPOT;
+      }
+      soft_stats_count_variant(miss, x1 - x0);
+   }
+#endif
    /* Alpha following the colour mode gets its own loop; split alpha is chosen per pixel. */
 #define MODE(m) case m: \
       if (prog->amode == SA_SAME && tk == TK_POINT2) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_POINT2); \

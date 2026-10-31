@@ -74,6 +74,7 @@ void soft_stats_end(void)
 }
 
 static uint64_t span_px[2][2];
+static uint64_t variant_tight[2], variant_any[2][SOFT_MISS_COUNT], variant_sole[2][SOFT_MISS_COUNT];
 
 #define PROG_SLOTS 64
 
@@ -92,6 +93,23 @@ static uint64_t prog_other_px[2];
 void soft_stats_count_path(int generic, int n)
 {
    span_px[lane][generic != 0] += (uint64_t)n;
+}
+
+void soft_stats_count_variant(unsigned miss, int n)
+{
+   int i;
+   if (!miss)
+   {
+      variant_tight[lane] += (uint64_t)n;
+      return;
+   }
+   for (i = 0; i < SOFT_MISS_COUNT; i++)
+      if (miss & (1u << i))
+      {
+         variant_any[lane][i] += (uint64_t)n;
+         if (miss == (1u << i))
+            variant_sole[lane][i] += (uint64_t)n;
+      }
 }
 
 static void count_program(int l, const uint8_t sel[2][2][4], int cycles, uint64_t n)
@@ -317,6 +335,9 @@ void soft_stats_reset_counts(void)
    memset(tris, 0, sizeof(tris));
    memset(pixels, 0, sizeof(pixels));
    memset(span_px, 0, sizeof(span_px));
+   memset(variant_tight, 0, sizeof(variant_tight));
+   memset(variant_any, 0, sizeof(variant_any));
+   memset(variant_sole, 0, sizeof(variant_sole));
    memset(prog_used, 0, sizeof(prog_used));
    memset(prog_other_px, 0, sizeof(prog_other_px));
 }
@@ -357,6 +378,17 @@ void soft_stats_frame(void)
             (span_px[0][0] + span_px[1][0]) / (double)busy_frames,
             (span_px[0][1] + span_px[1][1]) / (double)busy_frames);
 #ifdef SOFT_STATS
+      {
+         static const char *names[SOFT_MISS_COUNT] = { "blend", "fog", "alpha-test", "split-alpha",
+               "clamp", "mirror", "npot", "untextured", "generic" };
+         double bf = (double)busy_frames;
+         int i;
+         log_cb(RETRO_LOG_INFO, "soft: tight loop %.0f px/busy frame\n", (variant_tight[0] + variant_tight[1]) / bf);
+         for (i = 0; i < SOFT_MISS_COUNT; i++)
+            log_cb(RETRO_LOG_INFO, "soft: missed by %s: %.0f px/busy frame, %.0f with no other reason\n",
+                  names[i], (variant_any[0][i] + variant_any[1][i]) / bf,
+                  (variant_sole[0][i] + variant_sole[1][i]) / bf);
+      }
       log_programs((double)busy_frames);
 #endif
    }
