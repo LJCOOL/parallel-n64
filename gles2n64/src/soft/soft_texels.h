@@ -48,11 +48,19 @@ static INLINE uint32_t GetCI4RGBA_RGBA8888( uint64_t *src, uint16_t x, uint16_t 
    return RGBA5551_RGBA8888( *(uint16_t*)&TMEM[256 + (palette << 4) + (color4B >> 4)] );
 }
 
+/* IA31_RGBA8888 puts alpha in the low byte; the soft planes want alpha high like the other formats. */
+static INLINE uint32_t soft_ia31(uint8_t color)
+{
+	uint32_t i = Three2Eight[color >> 1];
+	uint32_t a = One2Eight[color & 0x01];
+	return (a << 24) | (i << 16) | (i << 8) | i;
+}
+
 static INLINE uint32_t GetIA31_RGBA8888( uint64_t *src, uint16_t x, uint16_t i, uint8_t palette )
 {
 	uint8_t color4B = ((uint8_t*)src)[(x>>1)^(i<<1)];
 
-	return IA31_RGBA8888( (x & 1) ? (color4B & 0x0F) : (color4B >> 4) );
+	return soft_ia31( (x & 1) ? (color4B & 0x0F) : (color4B >> 4) );
 }
 
 static INLINE uint32_t GetIA31_RGBA4444( uint64_t *src, uint16_t x, uint16_t i, uint8_t palette )
