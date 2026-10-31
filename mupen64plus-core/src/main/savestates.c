@@ -108,7 +108,10 @@ int savestates_load_m64p(const unsigned char *data, size_t size)
 
    /* Read and check Mupen64Plus magic number. */
    if(strncmp((char *)curr, savestate_magic, 8)!=0)
+   {
+      DebugMessage(M64MSG_ERROR, "savestate: bad magic");
       return 0;
+   }
 
    curr += 8;
 
@@ -119,7 +122,10 @@ int savestates_load_m64p(const unsigned char *data, size_t size)
 
    /* any 1.x up to the version this build writes */
    if (version < 0x00010000 || version > savestate_latest_version)
+   {
+      DebugMessage(M64MSG_ERROR, "savestate: unsupported version %08x", version);
       return 0;
+   }
 
    /* Identity check.  New states carry the "M64H"-prefixed header
     * identity written by open_rom; reject those only on a real mismatch
@@ -128,7 +134,10 @@ int savestates_load_m64p(const unsigned char *data, size_t size)
     * longer be verified without hashing the ROM, so they are accepted
     * as-is. */
    if(!memcmp((char *)curr, "M64H", 4) && memcmp((char *)curr, ROM_SETTINGS.MD5, 32))
+   {
+      DebugMessage(M64MSG_ERROR, "savestate: identity %.32s does not match %.32s", (char *)curr, ROM_SETTINGS.MD5);
       return 0;
+   }
 
    curr += 32;
 
