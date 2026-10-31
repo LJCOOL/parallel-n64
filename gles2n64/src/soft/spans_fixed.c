@@ -142,10 +142,10 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    /* A negative amode_const reads the alpha mode at run time. */
    const int amode = mode == SC_GENERIC ? SA_SAME : (amode_const < 0 ? (int)prog->amode : amode_const);
    int pow2 = 0, ms = 0, mt = 0, x, ch, filter = p->filter;
-   /* Flags read once; simple means opaque with no fog or alpha test. */
+   /* Flags read once; simple 1 is opaque, 2 blended, both with no fog or alpha test. */
    const int z_test = p->z_test, z_write = p->z_test && p->z_update;
    const int fog = !simple && p->fog, alpha_test = !simple && p->alpha_test;
-   const int blend = simple ? SB_OPAQUE : p->blend;
+   const int blend = simple == 1 ? SB_OPAQUE : p->blend;
    /* Rows whose depth stays in [0, 65536) step unsigned 32-bit; others need 64-bit. */
    int64_t z_end = z + dz * (x1 - x0 - 1);
    int z_fast = z >= 0 && z < (65536LL << 16) && z_end >= 0 && z_end < (65536LL << 16);
@@ -307,6 +307,23 @@ next:
    }
 }
 
+/* Tight loops per texture kind; opaque drops the alpha mode, blended keeps it. */
+static inline __attribute__((always_inline)) void tight_opaque(const SoftTarget *t,
+      const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int m, int tk)
+{
+   if (tk == TK_POINT) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_POINT);
+   else if (tk == TK_FILTER) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_FILTER);
+   else span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_NONE);
+}
+
+static inline __attribute__((always_inline)) void tight_blended(const SoftTarget *t,
+      const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int m, int tk)
+{
+   if (tk == TK_POINT) span_mode(t, p, tri, y, x0, x1, m, -1, 2, TK_POINT);
+   else if (tk == TK_FILTER) span_mode(t, p, tri, y, x0, x1, m, -1, 2, TK_FILTER);
+   else span_mode(t, p, tri, y, x0, x1, m, -1, 2, TK_NONE);
+}
+
 static int tight_axis_ok(int wrap, int n)
 {
    return wrap == SOFT_CLAMP || (wrap == SOFT_WRAP && !(n & (n - 1)));
@@ -316,13 +333,14 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       const SoftTri *tri, int y, int x0, int x1)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
-   const int simple = p->blend == SB_OPAQUE && !p->fog && !p->alpha_test;
+   const int nofx = !p->fog && !p->alpha_test, opaque = p->blend == SB_OPAQUE;
+   const int simple = opaque && nofx;
    const SoftTex *tex = p->tex;
    int tk = TK_RUNTIME;
    /* Opaque spans never read alpha, so the alpha mode and alpha-only texture use drop out. */
-   if (tight_enabled && simple && prog->mode != SC_GENERIC)
+   if (tight_enabled && nofx && prog->mode != SC_GENERIC)
    {
-      if (prog->mode == SC_SHADE)
+      if (opaque ? prog->mode == SC_SHADE : !prog->uses_tex)
          tk = TK_NONE;
       else if (tight_axis_ok(tex->wrap_s, tex->w) && tight_axis_ok(tex->wrap_t, tex->h))
          tk = p->filter ? TK_FILTER : TK_POINT;
@@ -354,9 +372,8 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
 #endif
    /* Alpha following the colour mode gets its own loop; split alpha is chosen per pixel. */
 #define MODE(m) case m: \
-      if (tk == TK_POINT) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_POINT); \
-      else if (tk == TK_FILTER) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_FILTER); \
-      else if (tk == TK_NONE) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_NONE); \
+      if (tk != TK_RUNTIME && opaque) tight_opaque(t, p, tri, y, x0, x1, m, tk); \
+      else if (tk != TK_RUNTIME) tight_blended(t, p, tri, y, x0, x1, m, tk); \
       else if (prog->amode == SA_SAME && simple) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_RUNTIME); \
       else if (prog->amode == SA_SAME) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 0, TK_RUNTIME); \
       else span_mode(t, p, tri, y, x0, x1, m, -1, 0, TK_RUNTIME); \
