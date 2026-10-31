@@ -78,10 +78,30 @@ typedef struct SoftPipe
    int blend;                 /* SoftBlendMode */
 } SoftPipe;
 
+/* Edge a->b; top-left edges own their boundary pixels. */
+typedef struct
+{
+   int64_t value;   /* at the bounding box origin pixel centre */
+   int64_t step_x, step_y;
+} SoftEdge;
+
+/* A culled, clipped and set-up triangle, ready to raster any band without repeating setup. */
+typedef struct
+{
+   SoftTri tri;
+   SoftEdge e[3];
+   int x0, y0, x1, y1;
+} SoftTriSetup;
+
 void soft_target_init(SoftTarget *t, uint16_t *color, uint16_t *depth, int w, int h);
 void soft_set_scissor(SoftTarget *t, int x0, int y0, int x1, int y1);
 void soft_draw_tri(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p);
+/* Sets up a triangle against t's scissor; returns 0 when nothing is drawn. Keeps pointers to the vertices. */
+int soft_tri_prepare(SoftTriSetup *s, const SoftTarget *t, const SoftVert *v0,
+      const SoftVert *v1, const SoftVert *v2, const SoftPipe *p);
+/* Rasters rows of band 0 or 1 of a prepared triangle; band -1 draws every row. */
+void soft_tri_raster(const SoftTriSetup *s, SoftTarget *t, const SoftPipe *p, int band);
 /* Draws only rows of band 0 or 1; band -1 draws every row. */
 void soft_draw_tri_band(SoftTarget *t, const SoftVert *v0, const SoftVert *v1,
       const SoftVert *v2, const SoftPipe *p, int band);
