@@ -94,6 +94,8 @@ void apply_mem_mapping(struct memory* mem, const struct mem_mapping* mapping);
 
 void* init_mem_base(void);
 void release_mem_base(void* mem_base);
+/* Maps a native-order ROM file over the cartridge area; returns 0, or -1 to fall back to reading. */
+int mem_base_map_cart_file(void* mem_base, int fd, size_t size);
 uint32_t* mem_base_u32(void* mem_base, uint32_t address);
 
 void read_with_bp_checks(void* opaque, uint32_t address, uint32_t* value);

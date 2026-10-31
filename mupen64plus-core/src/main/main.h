@@ -47,6 +47,8 @@ extern struct cheat_ctx g_cheat_ctx;
 extern void* g_mem_base;
 
 extern struct device g_dev;
+/* Optional hook: maps a word-swapped copy of the ROM over cart; returns 0, or nonzero to swap in place. */
+extern int (*g_cart_map_swapped)(uint8_t* cart, size_t size);
 
 extern m64p_media_loader g_media_loader;
 
