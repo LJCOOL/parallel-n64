@@ -99,8 +99,22 @@ static inline void eval_generic(const GenericPlan *g, uint8_t *v, int *c)
       c[ch] = v[R_COMB * 4 + ch];
 }
 
-/* Texture fetch chosen per span: run-time checks, or fixed power-of-two wrapping point or filtered. */
-enum { TK_RUNTIME, TK_POINT2, TK_FILTER2 };
+/* Texture fetch chosen per span: run-time checks, none, or branchless wrap-or-clamp point or filtered. */
+enum { TK_RUNTIME, TK_NONE, TK_POINT, TK_FILTER };
+
+static int tight_enabled = 1;
+
+void soft_span_fixed_set_tight(int on)
+{
+   tight_enabled = on;
+}
+
+/* Wraps a power-of-two axis when and is size - 1, clamps when and is -1. */
+static inline int tight_axis(int i, int and_mask, int max)
+{
+   i &= and_mask;
+   return i < 0 ? 0 : (i > max ? max : i);
+}
 
 /* Integer span: 16.16 colour, texture and depth steps; inlined once per constant mode. */
 static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
@@ -122,9 +136,9 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    int64_t dz = (int64_t)floor((double)tri->z.dx * 65536.0);
    int32_t s = 0, tt = 0, ds = 0, dt = 0, seg_s = 0, seg_t = 0;
    int bias = p->decal ? SOFT_DECAL_BIAS : 0;
-   const int uses_tex = tk != TK_RUNTIME || prog->uses_tex;
+   const int uses_tex = tk == TK_POINT || tk == TK_FILTER || (tk == TK_RUNTIME && prog->uses_tex);
    const uint32_t *rgba = uses_tex ? tex->rgba : NULL;
-   int wshift = 0;
+   int width = 0, sand = 0, tand = 0;
    /* A negative amode_const reads the alpha mode at run time. */
    const int amode = mode == SC_GENERIC ? SA_SAME : (amode_const < 0 ? (int)prog->amode : amode_const);
    int pow2 = 0, ms = 0, mt = 0, x, ch, filter = p->filter;
@@ -148,8 +162,9 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
           && !(tex->w & (tex->w - 1)) && !(tex->h & (tex->h - 1));
       ms = tex->w - 1;
       mt = tex->h - 1;
-      while ((1 << wshift) < tex->w)
-         wshift++;
+      width = tex->w;
+      sand = tex->wrap_s == SOFT_CLAMP ? -1 : ms;
+      tand = tex->wrap_t == SOFT_CLAMP ? -1 : mt;
    }
    if (mode == SC_GENERIC)
    {
@@ -201,11 +216,11 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       {
          int si = s >> 16, ti = tt >> 16;
          uint32_t texel;
-         if (tk == TK_FILTER2)
-            texel = soft_filter3_at(rgba, 1 << wshift, si & ms, (si + 1) & ms,
-                  ti & mt, (ti + 1) & mt, (s >> 11) & 31, (tt >> 11) & 31);
-         else if (tk == TK_POINT2)
-            texel = rgba[(ti & mt) << wshift | (si & ms)];
+         if (tk == TK_FILTER)
+            texel = soft_filter3_at(rgba, width, tight_axis(si, sand, ms), tight_axis(si + 1, sand, ms),
+                  tight_axis(ti, tand, mt), tight_axis(ti + 1, tand, mt), (s >> 11) & 31, (tt >> 11) & 31);
+         else if (tk == TK_POINT)
+            texel = rgba[tight_axis(ti, tand, mt) * width + tight_axis(si, sand, ms)];
          else if (filter && pow2)
             texel = soft_filter3_at(tex->rgba, tex->w, si & ms, (si + 1) & ms,
                   ti & mt, (ti + 1) & mt, (s >> 11) & 31, (tt >> 11) & 31);
@@ -292,6 +307,11 @@ next:
    }
 }
 
+static int tight_axis_ok(int wrap, int n)
+{
+   return wrap == SOFT_CLAMP || (wrap == SOFT_WRAP && !(n & (n - 1)));
+}
+
 void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       const SoftTri *tri, int y, int x0, int x1)
 {
@@ -299,32 +319,44 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
    const int simple = p->blend == SB_OPAQUE && !p->fog && !p->alpha_test;
    const SoftTex *tex = p->tex;
    int tk = TK_RUNTIME;
-   if (simple && prog->uses_tex && tex->wrap_s == SOFT_WRAP && tex->wrap_t == SOFT_WRAP
-         && !(tex->w & (tex->w - 1)) && !(tex->h & (tex->h - 1)))
-      tk = p->filter ? TK_FILTER2 : TK_POINT2;
+   /* Opaque spans never read alpha, so the alpha mode and alpha-only texture use drop out. */
+   if (tight_enabled && simple && prog->mode != SC_GENERIC)
+   {
+      if (prog->mode == SC_SHADE)
+         tk = TK_NONE;
+      else if (tight_axis_ok(tex->wrap_s, tex->w) && tight_axis_ok(tex->wrap_t, tex->h))
+         tk = p->filter ? TK_FILTER : TK_POINT;
+   }
 #ifdef SOFT_STATS
    {
       unsigned miss = 0;
+      if (tk != TK_RUNTIME)
+         ;
+      else
+      {
       if (p->blend != SB_OPAQUE) miss |= 1u << SOFT_MISS_BLEND;
       if (p->fog) miss |= 1u << SOFT_MISS_FOG;
       if (p->alpha_test) miss |= 1u << SOFT_MISS_ALPHA_TEST;
-      if (prog->mode != SC_GENERIC && prog->amode != SA_SAME) miss |= 1u << SOFT_MISS_SPLIT_ALPHA;
+      if (!simple && prog->mode != SC_GENERIC && prog->amode != SA_SAME) miss |= 1u << SOFT_MISS_SPLIT_ALPHA;
       if (prog->mode == SC_GENERIC) miss |= 1u << SOFT_MISS_GENERIC;
       if (!prog->uses_tex)
          miss |= 1u << SOFT_MISS_UNTEXTURED;
       else
       {
-         if (tex->wrap_s == SOFT_CLAMP || tex->wrap_t == SOFT_CLAMP) miss |= 1u << SOFT_MISS_CLAMP;
          if (tex->wrap_s == SOFT_MIRROR || tex->wrap_t == SOFT_MIRROR) miss |= 1u << SOFT_MISS_MIRROR;
-         if ((tex->w & (tex->w - 1)) || (tex->h & (tex->h - 1))) miss |= 1u << SOFT_MISS_NPOT;
+         if ((tex->wrap_s == SOFT_WRAP && (tex->w & (tex->w - 1)))
+               || (tex->wrap_t == SOFT_WRAP && (tex->h & (tex->h - 1))))
+            miss |= 1u << SOFT_MISS_NPOT;
+      }
       }
       soft_stats_count_variant(miss, x1 - x0);
    }
 #endif
    /* Alpha following the colour mode gets its own loop; split alpha is chosen per pixel. */
 #define MODE(m) case m: \
-      if (prog->amode == SA_SAME && tk == TK_POINT2) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_POINT2); \
-      else if (prog->amode == SA_SAME && tk == TK_FILTER2) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_FILTER2); \
+      if (tk == TK_POINT) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_POINT); \
+      else if (tk == TK_FILTER) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_FILTER); \
+      else if (tk == TK_NONE) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_NONE); \
       else if (prog->amode == SA_SAME && simple) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_RUNTIME); \
       else if (prog->amode == SA_SAME) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 0, TK_RUNTIME); \
       else span_mode(t, p, tri, y, x0, x1, m, -1, 0, TK_RUNTIME); \
