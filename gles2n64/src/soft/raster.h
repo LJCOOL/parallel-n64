@@ -76,6 +76,7 @@ typedef struct SoftPipe
    uint32_t fog_color;
    int fog;
    int blend;                 /* SoftBlendMode */
+   int filter;                /* N64 three-point texture filtering */
 } SoftPipe;
 
 /* Edge a->b; top-left edges own their boundary pixels. */

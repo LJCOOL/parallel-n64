@@ -178,7 +178,7 @@ typedef struct
    SoftTarget t;
    SoftPipe p;
    SoftVert v[4];
-   uint64_t ns[2];
+   uint64_t ns[4];
    pthread_t thread;
 } CalibLane;
 
@@ -205,14 +205,17 @@ static void calib_lane_init(CalibLane *c, SoftTex *tex)
    }
 }
 
-/* Full screen four times per mode: fast path, then generic. */
-static void calib_lane_draw(CalibLane *c)
+/* Full screen four times per pass: fast, generic, fast filtered, then shade only. */
+static void calib_lane_draw(CalibLane *c, int passes)
 {
+   static const SoftCombineMode modes[4] = { SC_TEX_MUL_SHADE, SC_GENERIC, SC_TEX_MUL_SHADE, SC_SHADE };
    uint64_t t0;
    int k, pass;
-   for (pass = 0; pass < 2; pass++)
+   for (pass = 0; pass < passes; pass++)
    {
-      c->prog.mode = pass ? SC_GENERIC : SC_TEX_MUL_SHADE;
+      c->prog.mode = modes[pass];
+      c->prog.uses_tex = modes[pass] != SC_SHADE;
+      c->p.filter = pass == 2;
       t0 = now_ns();
       for (k = 0; k < 4; k++)
       {
@@ -228,7 +231,7 @@ static void *calib_lane_main(void *arg)
 {
    while (!calib_go)
       ;
-   calib_lane_draw((CalibLane*)arg);
+   calib_lane_draw((CalibLane*)arg, 2);
    return NULL;
 }
 
@@ -253,7 +256,7 @@ static void calibrate_contention(double solo_fast, double solo_generic)
    }
 #endif
    calib_go = 1;
-   calib_lane_draw(&calib_lanes[0]);
+   calib_lane_draw(&calib_lanes[0], 2);
    pthread_join(other->thread, NULL);
    if (log_cb)
       log_cb(RETRO_LOG_INFO, "soft: calib paired fast %.1f/%.1f ns/px (solo %.1f), generic %.1f/%.1f ns/px (solo %.1f)\n",
@@ -280,9 +283,14 @@ static void calibrate(void)
    soft_tex_expand(&tex);
    calib_lane_init(&calib_lanes[0], &tex);
    calib_lane_init(&calib_lanes[1], &tex);
-   calib_lane_draw(c);
+   calib_lane_draw(c, 4);
    fast = calib_px_ns(c->ns[0]);
    generic = calib_px_ns(c->ns[1]);
+   if (log_cb)
+      log_cb(RETRO_LOG_INFO, "soft: calib fast filtered %.1f ns/px, shade only %.1f ns/px\n",
+            calib_px_ns(c->ns[2]), calib_px_ns(c->ns[3]));
+   c->prog.uses_tex = 1;
+   c->p.filter = 0;
    /* 2000 eight-pixel triangles measure per-triangle overhead. */
    c->prog.mode = SC_TEX_MUL_SHADE;
    t0 = now_ns();
