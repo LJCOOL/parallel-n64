@@ -28,16 +28,44 @@ extern unsigned int IgnoreTLBExceptions;
 #include "device/rdram/rdram.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <string.h>
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 extern unsigned int r4300_jit_backend;
+
+/* Zeroes a large table by handing its whole pages back to the kernel, so untouched entries cost no RAM. */
+static void zero_table(void* table, size_t size)
+{
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+    uintptr_t start = (uintptr_t)table, end = start + size;
+    long page = sysconf(_SC_PAGESIZE);
+
+    if (page > 0)
+    {
+        uintptr_t first = (start + (uintptr_t)page - 1) & ~((uintptr_t)page - 1);
+        uintptr_t last  = end & ~((uintptr_t)page - 1);
+
+        if (first < last && madvise((void*)first, last - first, MADV_DONTNEED) == 0)
+        {
+            memset(table, 0, first - start);
+            memset((void*)last, 0, end - last);
+            return;
+        }
+    }
+#endif
+    memset(table, 0, size);
+}
 
 void poweron_tlb(struct tlb* tlb)
 {
     /* clear TLB entries */
     memset(tlb->entries, 0, 32 * sizeof(tlb->entries[0]));
-    memset(tlb->LUT_r, 0, 0x100000 * sizeof(tlb->LUT_r[0]));
-    memset(tlb->LUT_w, 0, 0x100000 * sizeof(tlb->LUT_w[0]));
+    zero_table(tlb->LUT_r, 0x100000 * sizeof(tlb->LUT_r[0]));
+    zero_table(tlb->LUT_w, 0x100000 * sizeof(tlb->LUT_w[0]));
 }
 
 void tlb_unmap(struct tlb* tlb, size_t entry)
