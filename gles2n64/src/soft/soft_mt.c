@@ -1,4 +1,4 @@
-#ifdef __linux__
+#if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif
 #include <pthread.h>
@@ -41,7 +41,11 @@ static void *worker_main(void *arg)
       t = job_t;
       pthread_mutex_unlock(&lock);
 
-      soft_queue_replay(q, t, 1);
+      {
+         SOFT_TIME_BEGIN(t0);
+         soft_queue_replay(q, t, 1);
+         SOFT_TIME_END(SOFT_T_BAND1, t0);
+      }
 
       pthread_mutex_lock(&lock);
       done_gen = seen;
@@ -60,10 +64,14 @@ int soft_mt_start(void)
       return 0;
 #ifdef __linux__
    {
+      /* The caller (emulation thread) takes CPU 0 and the worker CPU 1, so they never share. */
       cpu_set_t set;
       CPU_ZERO(&set);
       CPU_SET(1, &set);
       pthread_setaffinity_np(worker, sizeof(set), &set);
+      CPU_ZERO(&set);
+      CPU_SET(0, &set);
+      pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
    }
 #endif
    running = 1;
@@ -99,10 +107,17 @@ void soft_mt_replay(const SoftQueue *q, SoftTarget *t)
    pthread_cond_signal(&start_cv);
    pthread_mutex_unlock(&lock);
 
-   soft_queue_replay(q, t, 0);
-
-   pthread_mutex_lock(&lock);
-   while (done_gen != g)
-      pthread_cond_wait(&done_cv, &lock);
-   pthread_mutex_unlock(&lock);
+   {
+      SOFT_TIME_BEGIN(t0);
+      soft_queue_replay(q, t, 0);
+      SOFT_TIME_END(SOFT_T_BAND0, t0);
+   }
+   {
+      SOFT_TIME_BEGIN(t1);
+      pthread_mutex_lock(&lock);
+      while (done_gen != g)
+         pthread_cond_wait(&done_cv, &lock);
+      pthread_mutex_unlock(&lock);
+      SOFT_TIME_END(SOFT_T_WAIT, t1);
+   }
 }

@@ -13,6 +13,9 @@ enum
    SOFT_T_DECODE,    /* texture decode on a cache miss */
    SOFT_T_RASTER,    /* triangle setup and spans */
    SOFT_T_PRESENT,   /* RGB565 to XRGB8888 widening */
+   SOFT_T_BAND0,     /* caller's band replay */
+   SOFT_T_BAND1,     /* worker's band replay */
+   SOFT_T_WAIT,      /* caller waiting for the worker */
    SOFT_T_COUNT
 };
 
