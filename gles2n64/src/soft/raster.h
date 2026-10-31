@@ -70,7 +70,10 @@ typedef struct SoftPipe
    int alpha_test;            /* drop texels with alpha below alpha_ref */
    uint8_t alpha_ref;
    const struct SoftTex *tex;
-   const void *prog;          /* SoftCombineProgram for soft_span_combine */
+   /* Tile 1 for TEXEL1, or NULL to reuse tex; its 16.16 coordinates are tile 0's times k plus o. */
+   const struct SoftTex *tex1;
+   int32_t tex1_ks, tex1_kt, tex1_os, tex1_ot;
+   const void *prog;         /* SoftCombineProgram for soft_span_combine */
    uint8_t prim[4], env[4];
    uint8_t prim_lod;
    uint32_t fog_color;

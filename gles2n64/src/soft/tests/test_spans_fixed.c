@@ -218,8 +218,50 @@ static void test_fixed_matches_scalar_perspective(void)
    run_fixed(0.5f, 0.001f, 20, 20);
 }
 
+/* TEXEL1 reads tile 1 at tile 0 coordinates mapped through the pipe's scale and offset. */
+static void test_texel1_samples_second_tile(void)
+{
+   static uint16_t rgb0[4], rgb1[16];
+   static uint32_t rgba0[4], rgba1[16];
+   static uint8_t a0[4], a1[16];
+   SoftTex t0, t1;
+   SoftCombineProgram prog;
+   SoftTarget tg;
+   SoftPipe p;
+   SoftTri tri;
+   int i;
+
+   for (i = 0; i < 4; i++) { rgb0[i] = 0xf800; a0[i] = 255; }
+   for (i = 0; i < 16; i++) { rgb1[i] = (uint16_t)(i & 1 ? 0x07e0 : 0x001f); a1[i] = 255; }
+   memset(&t0, 0, sizeof(t0)); memset(&t1, 0, sizeof(t1));
+   t0.rgb = rgb0; t0.a = a0; t0.rgba = rgba0; t0.w = 2; t0.h = 2;
+   t1.rgb = rgb1; t1.a = a1; t1.rgba = rgba1; t1.w = 16; t1.h = 1;
+   soft_tex_expand(&t0); soft_tex_expand(&t1);
+
+   memset(&prog, 0, sizeof(prog));
+   prog.mode = SC_GENERIC; prog.cycles = 1; prog.uses_tex = 1;
+   for (i = 0; i < 2; i++)
+   {
+      prog.sel[0][i][0] = ZERO; prog.sel[0][i][1] = ZERO;
+      prog.sel[0][i][2] = ZERO; prog.sel[0][i][3] = TEXEL1;
+   }
+   memset(&p, 0, sizeof(p));
+   p.prog = &prog; p.tex = &t0; p.tex1 = &t1;
+   p.tex1_ks = 2 << 16; p.tex1_kt = 1 << 16; p.tex1_os = 0; p.tex1_ot = 0;
+
+   /* s runs 0.5, 1.5, ..., so tile 1 reads odd texels 1, 3, ...: green. */
+   memset(&tri, 0, sizeof(tri));
+   tri.w.c = 1.0f; tri.sw.dx = 1.0f;
+   memset(col_n, 0, sizeof(col_n)); memset(dep_n, 0, sizeof(dep_n));
+   soft_target_init(&tg, col_n, dep_n, W, 1);
+   soft_span_fixed(&tg, &p, &tri, 0, 0, 6);
+   for (i = 0; i < 6; i++)
+      CHECK(col_n[i] == 0x07e0);
+}
+
 int main(void)
 {
+   RUN(test_texel1_samples_second_tile);
    RUN(test_fixed_matches_scalar_affine);
    RUN(test_fixed_matches_scalar_perspective);
    RUN(test_tight_loop_matches_general_path);

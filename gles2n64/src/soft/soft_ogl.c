@@ -26,7 +26,8 @@ static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
 static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
 static SoftTarget soft_target;
 static SoftQueue soft_queue;
-static const SoftTex *soft_current_tex;
+static const SoftTex *soft_current_tex[2];
+static const struct gDPTile *soft_current_tile[2];
 
 #define SOFT_TEXCACHE_BUDGET (7 * 1024 * 1024)
 
@@ -38,7 +39,7 @@ void soft_ogl_init(void)
    soft_target_init(&soft_target, soft_color, soft_depth, SOFT_WIDTH, SOFT_HEIGHT);
    soft_queue_reset(&soft_queue);
    soft_texcache_init(SOFT_TEXCACHE_BUDGET);
-   soft_current_tex = NULL;
+   soft_current_tex[0] = soft_current_tex[1] = NULL;
    soft_mt_stop();
    if (log_cb)
       log_cb(RETRO_LOG_INFO, "soft: render threads %d\n", soft_mt_start() ? 2 : 1);
@@ -67,6 +68,7 @@ static void soft_record_tri(const SoftVert *v0, const SoftVert *v1, const SoftVe
    if (soft_queue_full(&soft_queue) || soft_texcache_over_budget())
       soft_flush();
    soft_texcache_pin(p->tex);
+   soft_texcache_pin(p->tex1);
    soft_queue_tri(&soft_queue, &soft_target, v0, v1, v2, p);
 }
 
@@ -143,17 +145,44 @@ static void soft_update_combiner(void)
 }
 
 
-/* Re-decodes tile 0 only when the texture, tile or TMEM state changed. */
-static const SoftTex *soft_texture(void)
+/* Re-decodes tile 0 or 1 when texture, tile or TMEM state changed, or a rectangle swapped its tile. */
+static const SoftTex *soft_texture(uint32_t t)
 {
-   if ((gSP.changed & CHANGED_TEXTURE) || (gDP.changed & (CHANGED_TILE | CHANGED_TMEM))
-         || soft_current_tex == NULL)
+   if ((gSP.changed & CHANGED_TEXTURE) || (gDP.changed & (CHANGED_TILE | CHANGED_TMEM)))
    {
-      soft_current_tex = soft_texcache_get(0);
+      soft_current_tex[0] = soft_current_tex[1] = NULL;
       gSP.changed &= ~CHANGED_TEXTURE;
       gDP.changed &= ~(CHANGED_TILE | CHANGED_TMEM);
    }
-   return soft_current_tex;
+   if (soft_current_tex[t] == NULL || soft_current_tile[t] != gSP.textureTile[t])
+   {
+      /* A lookup may evict unpinned entries, so keep the other tile's texture alive. */
+      soft_texcache_pin(soft_current_tex[t ^ 1]);
+      soft_current_tex[t] = soft_texcache_get(t);
+      soft_current_tile[t] = gSP.textureTile[t];
+   }
+   return soft_current_tex[t];
+}
+
+static int32_t soft_fix16(float v)
+{
+   return (int32_t)(v * 65536.0f + (v < 0.0f ? -0.5f : 0.5f));
+}
+
+/* Maps tile 0 texel coordinates onto tile 1; base is the half-texel offset triangles add. */
+static void soft_tex1_map(SoftPipe *p, float base)
+{
+   SoftTexCoords c0, c1;
+   float ks, kt;
+
+   soft_tex_coords(0, &c0);
+   soft_tex_coords(1, &c1);
+   ks = c1.shift_s / c0.shift_s;
+   kt = c1.shift_t / c0.shift_t;
+   p->tex1_ks = soft_fix16(ks);
+   p->tex1_kt = soft_fix16(kt);
+   p->tex1_os = soft_fix16(base - gSP.textureTile[1]->fuls - (base - gSP.textureTile[0]->fuls) * ks);
+   p->tex1_ot = soft_fix16(base - gSP.textureTile[1]->fult - (base - gSP.textureTile[0]->fult) * kt);
 }
 
 static SoftCombineProgram soft_prog;
@@ -170,7 +199,7 @@ static void soft_log(const char *msg)
 }
 
 /* Chooses span and per-draw state from RDP other modes and the combiner. */
-static void build_pipe(SoftPipe *p, bool *textured)
+static void build_pipe(SoftPipe *p, bool *textured, float tex_base)
 {
    bool zbuf;
    static bool logger_set;
@@ -215,11 +244,17 @@ static void build_pipe(SoftPipe *p, bool *textured)
    *textured = gDP.otherMode.cycleType != G_CYC_FILL && soft_prog.uses_tex;
    if (*textured)
    {
-      p->tex = soft_texture();
+      p->tex = soft_texture(0);
       if (p->tex == NULL)
       {
          *textured = false;
          soft_prog.uses_tex = 0;
+      }
+      else if (soft_prog.uses_tex1 && gSP.textureTile[1] != NULL)
+      {
+         p->tex1 = soft_texture(1);
+         if (p->tex1 != NULL)
+            soft_tex1_map(p, tex_base);
       }
    }
 }
@@ -234,10 +269,10 @@ static uint8_t soft_vertex_fog(const struct SPVertex *v)
    return soft_u8(f);
 }
 
-static void soft_build_pipe(SoftPipe *p, bool *textured)
+static void soft_build_pipe(SoftPipe *p, bool *textured, float tex_base)
 {
    SOFT_TIME_BEGIN(t0);
-   build_pipe(p, textured);
+   build_pipe(p, textured, tex_base);
    SOFT_TIME_END(SOFT_T_PIPE, t0);
 }
 
@@ -254,7 +289,7 @@ static void soft_draw_list(const uint8_t *elements, uint32_t count)
 
    soft_viewport(&vp);
    soft_update_scissor(shift);
-   soft_build_pipe(&pipe, &textured);
+   soft_build_pipe(&pipe, &textured, 0.5f);
    if (textured)
       soft_tex_coords(0, &tc);
 
@@ -398,7 +433,7 @@ void OGL_DrawRect(int ulx, int uly, int lrx, int lry, float *color)
 
       zf = zf * 32767.5f + 32767.5f;
       z  = (uint16_t)(zf < 0.0f ? 0.0f : (zf > 65535.0f ? 65535.0f : zf));
-      soft_build_pipe(&pipe, &textured);
+      soft_build_pipe(&pipe, &textured, 0.0f);
       pipe.cull = SOFT_CULL_NONE;
       soft_prog.uses_tex = 0;
       soft_rect_vert(&v[0], (float)ulx, (float)uly, shift, z, 0.0f, 0.0f);
@@ -422,7 +457,7 @@ void OGL_DrawTexturedRect(const struct TexturedRectParams *_params)
    int shift = soft_shift();
 
    soft_update_scissor(shift);
-   soft_build_pipe(&pipe, &textured);
+   soft_build_pipe(&pipe, &textured, 0.0f);
    pipe.cull = SOFT_CULL_NONE;
    s0 = t0 = s1 = t1 = 0.0f;
    if (textured)
@@ -473,7 +508,7 @@ void soft_ogl_stop(void)
    soft_mt_stop();
    soft_queue_reset(&soft_queue);
    soft_texcache_release();
-   soft_current_tex = NULL;
+   soft_current_tex[0] = soft_current_tex[1] = NULL;
 }
 
 void OGL_SwapBuffers(void)

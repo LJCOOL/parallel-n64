@@ -198,6 +198,7 @@ void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram
       log_generic(m, two_cycle_in);
    out->uses_tex   = uses(out, TEXEL0, TEXEL1);
    out->uses_shade = uses(out, SHADE, SHADE);
+   out->uses_tex1  = uses(out, TEXEL1, TEXEL1);
 }
 
 static int input(const SoftCombineInputs *in, const uint8_t *combined, int sel, int ch)

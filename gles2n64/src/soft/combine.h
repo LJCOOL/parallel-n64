@@ -50,6 +50,7 @@ typedef struct
    int cycles;
    SoftCombineMode mode;
    int uses_tex, uses_shade;
+   int uses_tex1;            /* reads TEXEL1 or its alpha */
    SoftAlphaMode amode;
 } SoftCombineProgram;
 

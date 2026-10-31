@@ -202,6 +202,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
    const SoftTex *tex = p->tex;
+   const SoftTex *tex1 = mode == SC_GENERIC && tk == TK_RUNTIME && prog->uses_tex ? p->tex1 : NULL;
    uint16_t *dst = t->color + y * t->width;
    uint16_t *zb  = t->depth + y * t->width;
    float fx = x0 + 0.5f, fy = y + 0.5f;
@@ -347,9 +348,21 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
             for (ch = 0; ch < 4; ch++) c[ch] = mul8(tx[ch], p->env[ch]);
             break;
          default:
+            if (tex1)
+            {
+               int32_t s1 = (int32_t)(((int64_t)s * p->tex1_ks) >> 16) + p->tex1_os;
+               int32_t t1 = (int32_t)(((int64_t)tt * p->tex1_kt) >> 16) + p->tex1_ot;
+               uint32_t texel1 = filter ? soft_tex_filter3(tex1, s1, t1)
+                  : tex1->rgba[wrap_texel(t1 >> 16, tex1->h, tex1->wrap_t) * tex1->w
+                     + wrap_texel(s1 >> 16, tex1->w, tex1->wrap_s)];
+               for (ch = 0; ch < 4; ch++)
+                  v[R_TEX1 * 4 + ch] = (uint8_t)(texel1 >> (8 * ch));
+            }
             for (ch = 0; ch < 4; ch++)
             {
-               v[R_TEX0 * 4 + ch]  = v[R_TEX1 * 4 + ch] = (uint8_t)tx[ch];
+               v[R_TEX0 * 4 + ch] = (uint8_t)tx[ch];
+               if (!tex1)
+                  v[R_TEX1 * 4 + ch] = (uint8_t)tx[ch];
                v[R_SHADE * 4 + ch] = (uint8_t)sh[ch];
                v[R_COMB * 4 + ch]  = 0;
             }
