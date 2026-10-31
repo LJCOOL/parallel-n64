@@ -116,6 +116,35 @@ static inline int wrap_texel(int i, int n, int mode)
    return i < 0 ? i + n : i;
 }
 
+/* Weighs three RGBA8888 texels, two channels per multiply; weights sum to 32. */
+static inline uint32_t soft_blend3(uint32_t a, uint32_t b, uint32_t c, int wa, int wb, int wc)
+{
+   const uint32_t m = 0x00ff00ffu;
+   uint32_t lo = (((a & m) * wa + (b & m) * wb + (c & m) * wc + 0x00100010u) >> 5) & m;
+   uint32_t hi = ((((a >> 8) & m) * wa + ((b >> 8) & m) * wb + ((c >> 8) & m) * wc + 0x00100010u) >> 5) & m;
+   return lo | hi << 8;
+}
+
+/* Three-point filter from wrapped texel rows and columns, with 5-bit fractions like the RDP. */
+static inline uint32_t soft_filter3_at(const uint32_t *rgba, int w, int s0, int s1, int t0, int t1,
+      int sf, int tf)
+{
+   const uint32_t *r0 = rgba + t0 * w, *r1 = rgba + t1 * w;
+   if (sf + tf < 32)
+      return soft_blend3(r0[s0], r0[s1], r1[s0], 32 - sf - tf, sf, tf);
+   return soft_blend3(r1[s1], r1[s0], r0[s1], sf + tf - 32, 32 - sf, 32 - tf);
+}
+
+/* Filters at 16.16 texel coordinates, applying the wrap modes; returns RGBA8888. */
+static inline uint32_t soft_tex_filter3(const SoftTex *tex, int32_t s, int32_t t)
+{
+   int si = s >> 16, ti = t >> 16;
+   return soft_filter3_at(tex->rgba, tex->w,
+         wrap_texel(si, tex->w, tex->wrap_s), wrap_texel(si + 1, tex->w, tex->wrap_s),
+         wrap_texel(ti, tex->h, tex->wrap_t), wrap_texel(ti + 1, tex->h, tex->wrap_t),
+         (s >> 11) & 31, (t >> 11) & 31);
+}
+
 static inline int mul8(int x, int y)
 {
    return (x * y + 255) >> 8;

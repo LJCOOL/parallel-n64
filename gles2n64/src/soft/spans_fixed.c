@@ -102,7 +102,7 @@ static inline void eval_generic(const GenericPlan *g, uint8_t *v, int *c)
 /* Integer span: 16.16 colour, texture and depth steps; inlined once per constant mode. */
 static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int mode,
-      const int amode_const)
+      const int amode_const, const int simple)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
    const SoftTex *tex = p->tex;
@@ -121,7 +121,11 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    int bias = p->decal ? SOFT_DECAL_BIAS : 0, uses_tex = prog->uses_tex;
    /* A negative amode_const reads the alpha mode at run time. */
    const int amode = mode == SC_GENERIC ? SA_SAME : (amode_const < 0 ? (int)prog->amode : amode_const);
-   int pow2 = 0, ms = 0, mt = 0, x, ch;
+   int pow2 = 0, ms = 0, mt = 0, x, ch, filter = p->filter;
+   /* Flags read once; simple means opaque with no fog or alpha test. */
+   const int z_test = p->z_test, z_write = p->z_test && p->z_update;
+   const int fog = !simple && p->fog, alpha_test = !simple && p->alpha_test;
+   const int blend = simple ? SB_OPAQUE : p->blend;
    /* Rows whose depth stays in [0, 65536) step unsigned 32-bit; others need 64-bit. */
    int64_t z_end = z + dz * (x1 - x0 - 1);
    int z_fast = z >= 0 && z < (65536LL << 16) && z_end >= 0 && z_end < (65536LL << 16);
@@ -176,7 +180,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          dt = (te - tt) >> SEG_SHIFT;
       }
 
-      if (p->z_test)
+      if (z_test)
       {
          zi = (z_fast ? (int)(z32 >> 16) : (int)(z >> 16)) - bias;
          zi = zi < 0 ? 0 : (zi > 65535 ? 65535 : zi);
@@ -187,13 +191,18 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       sh[0] = sat8(r); sh[1] = sat8(g); sh[2] = sat8(b); sh[3] = sat8(a);
       if (uses_tex)
       {
-         int si = s >> 16, ti = tt >> 16, i;
+         int si = s >> 16, ti = tt >> 16;
          uint32_t texel;
-         if (pow2)
-            i = (ti & mt) * tex->w + (si & ms);
+         if (filter && pow2)
+            texel = soft_filter3_at(tex->rgba, tex->w, si & ms, (si + 1) & ms,
+                  ti & mt, (ti + 1) & mt, (s >> 11) & 31, (tt >> 11) & 31);
+         else if (filter)
+            texel = soft_tex_filter3(tex, s, tt);
+         else if (pow2)
+            texel = tex->rgba[(ti & mt) * tex->w + (si & ms)];
          else
-            i = wrap_texel(ti, tex->h, tex->wrap_t) * tex->w + wrap_texel(si, tex->w, tex->wrap_s);
-         texel = tex->rgba[i];
+            texel = tex->rgba[wrap_texel(ti, tex->h, tex->wrap_t) * tex->w
+                  + wrap_texel(si, tex->w, tex->wrap_s)];
          tx[0] = texel & 0xff;
          tx[1] = (texel >> 8) & 0xff;
          tx[2] = (texel >> 16) & 0xff;
@@ -240,7 +249,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          default:               c[3] = mul8(tx[3], p->prim[3]); break;
       }
 
-      if (p->fog)
+      if (fog)
       {
          int fa = sat8(f);
          for (ch = 0; ch < 3; ch++)
@@ -249,12 +258,16 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
             c[ch] += ((fc - c[ch]) * fa + 127) / 255;
          }
       }
-      if (p->alpha_test && c[3] < p->alpha_ref)
+      if (alpha_test && c[3] < p->alpha_ref)
          goto next;
 
-      dst[x] = blend_pixel(p->blend, (uint32_t)c[0] | (uint32_t)c[1] << 8
-            | (uint32_t)c[2] << 16 | (uint32_t)c[3] << 24, dst[x]);
-      if (p->z_test && p->z_update)
+      /* Every mode leaves c in [0, 255], so opaque packing needs no clamp. */
+      if (blend == SB_OPAQUE)
+         dst[x] = (uint16_t)((c[0] >> 3) << 11 | (c[1] >> 2) << 5 | c[2] >> 3);
+      else
+         dst[x] = blend_pixel(blend, (uint32_t)c[0] | (uint32_t)c[1] << 8
+               | (uint32_t)c[2] << 16 | (uint32_t)c[3] << 24, dst[x]);
+      if (z_write)
          zb[x] = (uint16_t)zi;
 next:
       r += dr; g += dg; b += db; a += da; f += df;
@@ -270,10 +283,12 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       const SoftTri *tri, int y, int x0, int x1)
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
+   const int simple = p->blend == SB_OPAQUE && !p->fog && !p->alpha_test;
    /* Alpha following the colour mode gets its own loop; split alpha is chosen per pixel. */
 #define MODE(m) case m: \
-      if (prog->amode == SA_SAME) span_mode(t, p, tri, y, x0, x1, m, SA_SAME); \
-      else span_mode(t, p, tri, y, x0, x1, m, -1); \
+      if (prog->amode == SA_SAME && simple) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1); \
+      else if (prog->amode == SA_SAME) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 0); \
+      else span_mode(t, p, tri, y, x0, x1, m, -1, 0); \
       break
    switch (prog->mode)
    {
@@ -282,7 +297,10 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       MODE(SC_TEX_MUL_SHADE);
       MODE(SC_TEX_MUL_PRIM);
       MODE(SC_TEX_MUL_ENV);
-      default: span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME); break;
+      default:
+         if (simple) span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME, 1);
+         else span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME, 0);
+         break;
    }
 #undef MODE
 }

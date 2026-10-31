@@ -204,6 +204,7 @@ static void build_pipe(SoftPipe *p, bool *textured)
    p->blend = soft_blend_classify(gDP.otherMode.l, gDP.otherMode.forceBlender,
          gDP.otherMode.alphaCvgSel, gDP.otherMode.cycleType);
    p->fog = (soft_combine_flags & SC_FOGENABLED) != 0;
+   p->filter = gDP.otherMode.textureFilter != G_TF_POINT && gDP.otherMode.cycleType < G_CYC_COPY;
    p->fog_color = soft_u8(gDP.fogColor.r) | (soft_u8(gDP.fogColor.g) << 8) | (soft_u8(gDP.fogColor.b) << 16);
    p->prim[0] = soft_u8(gDP.primColor.r); p->prim[1] = soft_u8(gDP.primColor.g);
    p->prim[2] = soft_u8(gDP.primColor.b); p->prim[3] = soft_u8(gDP.primColor.a);

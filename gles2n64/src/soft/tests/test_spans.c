@@ -4,6 +4,7 @@
 #include "raster.h"
 #include "spans.h"
 #include "texcache.h"
+#include "span_pixel.h"
 
 #define W 32
 #define H 32
@@ -135,8 +136,89 @@ static void test_large_tex_coords_still_vary(void)
    CHECK(distinct > 0);
 }
 
+/* 4x2 RGBA texture: red rises along s, green marks the second row. */
+static uint32_t filt_rgba[8];
+static uint16_t filt_rgb[8];
+static uint8_t filt_a[8];
+
+static void filter_tex(SoftTex *tex)
+{
+   static const uint8_t red[4] = { 0, 248, 64, 128 };
+   int i;
+   for (i = 0; i < 8; i++)
+   {
+      filt_rgba[i] = red[i & 3] | (i >= 4 ? 200u << 8 : 0) | 0xffu << 24;
+      filt_rgb[i] = 0;
+      filt_a[i] = 255;
+   }
+   memset(tex, 0, sizeof(*tex));
+   tex->rgba = filt_rgba; tex->rgb = filt_rgb; tex->a = filt_a;
+   tex->w = 4; tex->h = 2; tex->mask_s = 3; tex->mask_t = 1;
+}
+
+static void test_three_point_filter_weights(void)
+{
+   SoftTex tex;
+   filter_tex(&tex);
+   /* Whole texel coordinates return that texel. */
+   CHECK(soft_tex_filter3(&tex, 1 << 16, 0) == filt_rgba[1]);
+   /* Halfway along s in the lower triangle: (0 * 16 + 248 * 16 + 16) >> 5. */
+   CHECK((soft_tex_filter3(&tex, 1 << 15, 0) & 0xff) == 124);
+   /* Upper triangle at (0.75, 0.75): T11 16/32, T01 8/32, T10 8/32. */
+   CHECK((soft_tex_filter3(&tex, 3 << 14, 3 << 14) & 0xff) == (248 * 16 + 0 * 8 + 248 * 8 + 16) >> 5);
+   CHECK(((soft_tex_filter3(&tex, 3 << 14, 3 << 14) >> 8) & 0xff) == (200 * 16 + 200 * 8 + 0 * 8 + 16) >> 5);
+   /* Wrapping: s = 3.5 blends the last texel with the first. */
+   CHECK((soft_tex_filter3(&tex, 7 << 15, 0) & 0xff) == (128 * 16 + 0 * 16 + 16) >> 5);
+   CHECK(soft_tex_filter3(&tex, 1 << 15, 0) >> 24 == 255);
+}
+
+static int distinct_in_row(int y)
+{
+   int i, n = 1;
+   for (i = 1; i < 16; i++)
+      if (color[y * W + i] != color[y * W + i - 1])
+         n++;
+   return n;
+}
+
+static void draw_filter_quad(int filter)
+{
+   static SoftCombineProgram prog;
+   SoftTex tex;
+   SoftTarget t; SoftPipe p;
+   SoftVert a = vert(0, 0, 0, 255, 255, 255), c = vert(16, 0, 0, 255, 255, 255);
+   SoftVert d = vert(16, 16, 0, 255, 255, 255), e = vert(0, 16, 0, 255, 255, 255);
+
+   filter_tex(&tex);
+   tex.wrap_s = tex.wrap_t = SOFT_CLAMP;
+   memset(&prog, 0, sizeof(prog));
+   prog.mode = SC_TEX; prog.cycles = 1; prog.uses_tex = 1;
+   setup(&t, &p, soft_span_fixed);
+   p.z_test = 0;
+   p.tex = &tex;
+   p.prog = &prog;
+   p.filter = filter;
+   /* Two texels stretched over 16 pixels. */
+   c.s = d.s = 2.0f;
+   soft_draw_tri(&t, &a, &c, &d, &p);
+   soft_draw_tri(&t, &a, &d, &e, &p);
+}
+
+static void test_filtered_span_blends_texels(void)
+{
+   int point, filtered;
+   draw_filter_quad(0);
+   point = distinct_in_row(0);
+   draw_filter_quad(1);
+   filtered = distinct_in_row(0);
+   CHECK(point <= 2);
+   CHECK(filtered > 4);
+}
+
 int main(void)
 {
+   RUN(test_three_point_filter_weights);
+   RUN(test_filtered_span_blends_texels);
    RUN(test_large_tex_coords_still_vary);
    RUN(test_depth_rejects_farther);
    RUN(test_decal_wins_coplanar);
