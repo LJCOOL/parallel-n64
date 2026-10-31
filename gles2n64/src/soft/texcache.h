@@ -26,7 +26,7 @@ typedef struct SoftTex
 /* Fills tex->rgba from tex->rgb and tex->a, replicating high bits like the spans do. */
 void soft_tex_expand(SoftTex *tex);
 
-/* Identity of a decoded texture; crc covers TMEM contents and tile parameters. */
+/* Identity of a decoded texture; crc covers TMEM contents and tile parameters, address the source image. */
 typedef struct
 {
    uint32_t crc;

@@ -43,6 +43,21 @@ static void test_cache_hit_returns_same(void)
    CHECK(a->rgb[0] == 0x1234);
 }
 
+/* Equal CRCs from different RAM addresses are different textures. */
+static void test_cache_separates_addresses(void)
+{
+   SoftTexKey k1 = key(0xabcd, 8, 8), k2 = key(0xabcd, 8, 8);
+   const SoftTex *a, *b;
+
+   k2.address = 0x180000;
+   soft_texcache_init(1024 * 1024);
+   decodes = 0;
+   a = soft_texcache_lookup(&k1, 0x200000, decode_fill, NULL);
+   b = soft_texcache_lookup(&k2, 0x200000, decode_fill, NULL);
+   CHECK(a != b);
+   CHECK(decodes == 2);
+}
+
 static void test_expand_replicates_bits_and_alpha(void)
 {
    uint16_t rgb[3] = { 0xffff, 0x0000, 0x8410 };
@@ -169,6 +184,7 @@ static void test_over_budget_reported_while_pinned(void)
 int main(void)
 {
    RUN(test_cache_hit_returns_same);
+   RUN(test_cache_separates_addresses);
    RUN(test_expand_replicates_bits_and_alpha);
    RUN(test_cache_fills_rgba);
    RUN(test_cache_evicts_under_budget);

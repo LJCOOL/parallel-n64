@@ -120,8 +120,12 @@ static uint32_t tile_crc(struct gDPTile *tile, const struct TileSizes *sz)
    const uint32_t lineBytes = tile->line << 3;
    uint32_t crc = 0xFFFFFFFF;
    uint32_t params[8];
+   /* A zero line stride repeats one row, so hash that row rather than nothing. */
+   uint32_t bytes = lineBytes ? sz->height * lineBytes : (((sz->width << tile->size) >> 1) + 7) & ~7u;
 
-   crc = Hash_Calculate(crc, &TMEM[tile->tmem], sz->height * lineBytes);
+   if (bytes > ((512 - (tile->tmem & 0x1FF)) << 3))
+      bytes = (512 - (tile->tmem & 0x1FF)) << 3;
+   crc = Hash_Calculate(crc, &TMEM[tile->tmem], bytes);
    if (tile->size == G_IM_SIZ_32b)
       crc = Hash_Calculate(crc, &TMEM[tile->tmem + 256], sz->height * lineBytes);
    if (gDP.otherMode.textureLUT != G_TT_NONE || tile->format == G_IM_FMT_CI)

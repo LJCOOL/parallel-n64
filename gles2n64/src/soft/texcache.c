@@ -27,12 +27,12 @@ static const SoftTex dummy = { dummy_rgb, dummy_a, 1, 1, SOFT_CLAMP, SOFT_CLAMP,
 
 static unsigned bucket_of(const SoftTexKey *k)
 {
-   return (k->crc ^ (k->crc >> 8) ^ k->w ^ ((unsigned)k->h << 3)) & (SOFT_TEX_BUCKETS - 1);
+   return (k->crc ^ (k->crc >> 8) ^ (k->address >> 3) ^ k->w ^ ((unsigned)k->h << 3)) & (SOFT_TEX_BUCKETS - 1);
 }
 
 static int same_key(const SoftTexKey *a, const SoftTexKey *b)
 {
-   return a->crc == b->crc && a->w == b->w && a->h == b->h
+   return a->crc == b->crc && a->address == b->address && a->w == b->w && a->h == b->h
        && a->wrap_s == b->wrap_s && a->wrap_t == b->wrap_t;
 }
 
