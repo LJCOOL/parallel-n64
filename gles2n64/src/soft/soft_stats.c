@@ -1,3 +1,7 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -166,72 +170,137 @@ static void log_programs(double busy)
       log_cb(RETRO_LOG_INFO, "soft: generic untracked %.0f px/busy frame\n", prog_other_px[0] / busy);
 }
 
-/* Times synthetic full-screen draws, small triangles and the clock itself on this CPU. */
-static void calibrate(void)
+/* One thread's full-screen draw state; each lane owns its buffers, the texture is shared. */
+typedef struct
 {
-   static uint16_t col[SOFT_WIDTH * SOFT_HEIGHT], dep[SOFT_WIDTH * SOFT_HEIGHT];
-   static uint16_t trgb[32 * 32];
-   static uint8_t ta[32 * 32];
-   static uint32_t trgba[32 * 32];
-   SoftTex tex;
+   uint16_t col[SOFT_WIDTH * SOFT_HEIGHT], dep[SOFT_WIDTH * SOFT_HEIGHT];
    SoftCombineProgram prog;
    SoftTarget t;
    SoftPipe p;
    SoftVert v[4];
-   uint64_t t0, ns[3];
-   int i, k, pass;
+   uint64_t ns[2];
+   pthread_t thread;
+} CalibLane;
+
+static CalibLane calib_lanes[2];
+static volatile int calib_go;
+
+static void calib_lane_init(CalibLane *c, SoftTex *tex)
+{
+   int i;
+   memset(&c->prog, 0, sizeof(c->prog));
+   c->prog.cycles = 1; c->prog.uses_tex = 1; c->prog.uses_shade = 1;
+   c->prog.sel[0][0][0] = TEXEL0; c->prog.sel[0][0][1] = ZERO; c->prog.sel[0][0][2] = SHADE; c->prog.sel[0][0][3] = ZERO;
+   c->prog.sel[0][1][0] = TEXEL0; c->prog.sel[0][1][1] = ZERO; c->prog.sel[0][1][2] = SHADE; c->prog.sel[0][1][3] = ZERO;
+   soft_target_init(&c->t, c->col, c->dep, SOFT_WIDTH, SOFT_HEIGHT);
+   memset(&c->p, 0, sizeof(c->p));
+   c->p.span = SOFT_SPAN_COMBINE; c->p.cull = SOFT_CULL_NONE; c->p.tex = tex; c->p.prog = &c->prog;
+   c->p.z_test = 1; c->p.z_update = 1;
+   memset(c->v, 0, sizeof(c->v));
+   for (i = 0; i < 4; i++)
+   {
+      c->v[i].x = (i & 1) ? SOFT_WIDTH * 16 : 0; c->v[i].y = (i & 2) ? SOFT_HEIGHT * 16 : 0;
+      c->v[i].z = 100; c->v[i].r = c->v[i].g = c->v[i].b = c->v[i].a = 200; c->v[i].invw = 1.0f;
+      c->v[i].s = (i & 1) ? 64.0f : 0.0f; c->v[i].t = (i & 2) ? 64.0f : 0.0f;
+   }
+}
+
+/* Full screen four times per mode: fast path, then generic. */
+static void calib_lane_draw(CalibLane *c)
+{
+   uint64_t t0;
+   int k, pass;
+   for (pass = 0; pass < 2; pass++)
+   {
+      c->prog.mode = pass ? SC_GENERIC : SC_TEX_MUL_SHADE;
+      t0 = now_ns();
+      for (k = 0; k < 4; k++)
+      {
+         memset(c->dep, 0xff, sizeof(c->dep));
+         soft_draw_tri(&c->t, &c->v[0], &c->v[1], &c->v[3], &c->p);
+         soft_draw_tri(&c->t, &c->v[0], &c->v[3], &c->v[2], &c->p);
+      }
+      c->ns[pass] = now_ns() - t0;
+   }
+}
+
+static void *calib_lane_main(void *arg)
+{
+   while (!calib_go)
+      ;
+   calib_lane_draw((CalibLane*)arg);
+   return NULL;
+}
+
+static double calib_px_ns(uint64_t ns)
+{
+   return (double)ns / (4.0 * SOFT_WIDTH * SOFT_HEIGHT);
+}
+
+/* Draws the same full screen on both cores at once; per-pixel slowdown versus solo shows memory contention. */
+static void calibrate_contention(double solo_fast, double solo_generic)
+{
+   CalibLane *other = &calib_lanes[1];
+   calib_go = 0;
+   if (pthread_create(&other->thread, NULL, calib_lane_main, other) != 0)
+      return;
+#ifdef __linux__
+   {
+      cpu_set_t set;
+      CPU_ZERO(&set);
+      CPU_SET(1, &set);
+      pthread_setaffinity_np(other->thread, sizeof(set), &set);
+   }
+#endif
+   calib_go = 1;
+   calib_lane_draw(&calib_lanes[0]);
+   pthread_join(other->thread, NULL);
+   if (log_cb)
+      log_cb(RETRO_LOG_INFO, "soft: calib paired fast %.1f/%.1f ns/px (solo %.1f), generic %.1f/%.1f ns/px (solo %.1f)\n",
+            calib_px_ns(calib_lanes[0].ns[0]), calib_px_ns(other->ns[0]), solo_fast,
+            calib_px_ns(calib_lanes[0].ns[1]), calib_px_ns(other->ns[1]), solo_generic);
+}
+
+/* Times synthetic full-screen draws, small triangles and the clock itself on this CPU. */
+static void calibrate(void)
+{
+   static uint16_t trgb[32 * 32];
+   static uint8_t ta[32 * 32];
+   static uint32_t trgba[32 * 32];
+   CalibLane *c = &calib_lanes[0];
+   SoftTex tex;
+   uint64_t t0, ns2;
+   double fast, generic;
+   int i, k;
 
    for (i = 0; i < 32 * 32; i++) { trgb[i] = (uint16_t)(i * 2654435761u >> 16); ta[i] = 255; }
    memset(&tex, 0, sizeof(tex));
    tex.rgb = trgb; tex.a = ta; tex.w = 32; tex.h = 32; tex.mask_s = 31; tex.mask_t = 31;
    tex.rgba = trgba;
    soft_tex_expand(&tex);
-   memset(&prog, 0, sizeof(prog));
-   prog.cycles = 1; prog.uses_tex = 1; prog.uses_shade = 1;
-   prog.sel[0][0][0] = TEXEL0; prog.sel[0][0][1] = ZERO; prog.sel[0][0][2] = SHADE; prog.sel[0][0][3] = ZERO;
-   prog.sel[0][1][0] = TEXEL0; prog.sel[0][1][1] = ZERO; prog.sel[0][1][2] = SHADE; prog.sel[0][1][3] = ZERO;
-   soft_target_init(&t, col, dep, SOFT_WIDTH, SOFT_HEIGHT);
-   memset(&p, 0, sizeof(p));
-   p.span = SOFT_SPAN_COMBINE; p.cull = SOFT_CULL_NONE; p.tex = &tex; p.prog = &prog;
-   p.z_test = 1; p.z_update = 1;
-   memset(v, 0, sizeof(v));
-   for (i = 0; i < 4; i++)
-   {
-      v[i].x = (i & 1) ? SOFT_WIDTH * 16 : 0; v[i].y = (i & 2) ? SOFT_HEIGHT * 16 : 0;
-      v[i].z = 100; v[i].r = v[i].g = v[i].b = v[i].a = 200; v[i].invw = 1.0f;
-      v[i].s = (i & 1) ? 64.0f : 0.0f; v[i].t = (i & 2) ? 64.0f : 0.0f;
-   }
-   /* Full screen four times per mode: fast path, then generic. */
-   for (pass = 0; pass < 2; pass++)
-   {
-      prog.mode = pass ? SC_GENERIC : SC_TEX_MUL_SHADE;
-      t0 = now_ns();
-      for (k = 0; k < 4; k++)
-      {
-         memset(dep, 0xff, sizeof(dep));
-         soft_draw_tri(&t, &v[0], &v[1], &v[3], &p);
-         soft_draw_tri(&t, &v[0], &v[3], &v[2], &p);
-      }
-      ns[pass] = now_ns() - t0;
-   }
+   calib_lane_init(&calib_lanes[0], &tex);
+   calib_lane_init(&calib_lanes[1], &tex);
+   calib_lane_draw(c);
+   fast = calib_px_ns(c->ns[0]);
+   generic = calib_px_ns(c->ns[1]);
    /* 2000 eight-pixel triangles measure per-triangle overhead. */
-   prog.mode = SC_TEX_MUL_SHADE;
+   c->prog.mode = SC_TEX_MUL_SHADE;
    t0 = now_ns();
    for (k = 0; k < 2000; k++)
    {
-      SoftVert a = v[0], b = v[0], c = v[0];
+      SoftVert a = c->v[0], b = c->v[0], cc = c->v[0];
       a.x = (k % 300) * 16; a.y = (k % 200) * 16;
-      b.x = a.x + 64; b.y = a.y; c.x = a.x; c.y = a.y + 64;
-      soft_draw_tri(&t, &a, &b, &c, &p);
+      b.x = a.x + 64; b.y = a.y; cc.x = a.x; cc.y = a.y + 64;
+      soft_draw_tri(&c->t, &a, &b, &cc, &c->p);
    }
-   ns[2] = now_ns() - t0;
+   ns2 = now_ns() - t0;
    t0 = now_ns();
    for (k = 0; k < 1000; k++)
       (void)now_ns();
    if (log_cb)
       log_cb(RETRO_LOG_INFO, "soft: calib fast %.1f ns/px, generic %.1f ns/px, small tri %.2f us, clock %.0f ns\n",
-            (double)ns[0] / (4.0 * SOFT_WIDTH * SOFT_HEIGHT), (double)ns[1] / (4.0 * SOFT_WIDTH * SOFT_HEIGHT),
-            (double)ns[2] / 2000e3, (double)(now_ns() - t0) / 1000.0);
+            fast, generic, (double)ns2 / 2000e3, (double)(now_ns() - t0) / 1000.0);
+   calibrate_contention(fast, generic);
 }
 #endif
 
