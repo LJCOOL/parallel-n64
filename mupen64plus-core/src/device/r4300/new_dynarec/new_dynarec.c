@@ -132,6 +132,12 @@ void recomp_dbg_block(int addr);
 #elif NEW_DYNAREC == NEW_DYNAREC_ARM
 #include "arm/arm_cpu_features.h"
 #include "arm/assem_arm.h"
+#include "arm/asm_defines_gas.h"
+#include <stddef.h>
+/* linkage_arm.S reaches the hot state through this committed offset; regenerate the header when it fails. */
+_Static_assert(offsetof_struct_r4300_core_new_dynarec_hot_state
+      == offsetof(struct r4300_core, new_dynarec_hot_state), "arm/asm_defines_gas.h is stale");
+_Static_assert(sizeof(g_dev.r4300.extra_memory) == 1 << TARGET_SIZE_2, "dynarec cache size mismatch");
 #elif  NEW_DYNAREC == NEW_DYNAREC_ARM64
 #include "arm64/assem_arm64.h"
 #else

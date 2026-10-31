@@ -39,6 +39,11 @@
 
 #include "osal/preproc.h"
 
+/* Log2 of the dynarec code cache size; ARM branches reach +/-32 MB, so the cache stays beside the code. */
+#ifndef NEW_DYNAREC_CACHE_SHIFT
+#define NEW_DYNAREC_CACHE_SHIFT 25
+#endif
+
 struct memory;
 struct mi_controller;
 struct rdram;
@@ -191,7 +196,7 @@ struct r4300_core
     /* ari64 new dynarec hot state. extra_memory is a large scratch buffer the
      * JIT wants near its generated code; it is always reserved so the layout is
      * identical whether or not ari64 is the selected core. */
-    ALIGN(4096, char extra_memory[33554432]);
+    ALIGN(4096, char extra_memory[1 << NEW_DYNAREC_CACHE_SHIFT]);
     struct new_dynarec_hot_state new_dynarec_hot_state;
 
     unsigned int emumode;
