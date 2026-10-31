@@ -154,51 +154,22 @@ static inline __attribute__((always_inline)) void quad_opaque(const SoftPipe *p,
    }
    if (tk != TK_NONE)
    {
-      uint32_t texel[3][4], w[3][4];
-      uint32x4_t tv[3], wv[3];
+      uint32_t texel[4];
+      uint32x4_t tv;
       for (i = 0; i < 4; i++)
       {
          int32_t ls = (int32_t)((uint32_t)s + (uint32_t)ds * i), lt = (int32_t)((uint32_t)tt + (uint32_t)dt * i);
          int si = ls >> 16, ti = lt >> 16;
          if (tk == TK_FILTER)
-         {
-            /* Gather the three-point texels and weights; the blend runs on all lanes below. */
-            int s0 = tight_axis(si, sand, ms), s1 = tight_axis(si + 1, sand, ms);
-            const uint32_t *r0 = rgba + tight_axis(ti, tand, mt) * width;
-            const uint32_t *r1 = rgba + tight_axis(ti + 1, tand, mt) * width;
-            int sf = (ls >> 11) & 31, tf = (lt >> 11) & 31;
-            if (sf + tf < 32)
-            {
-               texel[0][i] = r0[s0]; texel[1][i] = r0[s1]; texel[2][i] = r1[s0];
-               w[0][i] = 32 - sf - tf; w[1][i] = sf; w[2][i] = tf;
-            }
-            else
-            {
-               texel[0][i] = r1[s1]; texel[1][i] = r1[s0]; texel[2][i] = r0[s1];
-               w[0][i] = sf + tf - 32; w[1][i] = 32 - sf; w[2][i] = 32 - tf;
-            }
-         }
+            texel[i] = soft_filter3_at(rgba, width, tight_axis(si, sand, ms), tight_axis(si + 1, sand, ms),
+                  tight_axis(ti, tand, mt), tight_axis(ti + 1, tand, mt), (ls >> 11) & 31, (lt >> 11) & 31);
          else
-            texel[0][i] = rgba[tight_axis(ti, tand, mt) * width + tight_axis(si, sand, ms)];
+            texel[i] = rgba[tight_axis(ti, tand, mt) * width + tight_axis(si, sand, ms)];
       }
-      for (i = 0; i < (tk == TK_FILTER ? 3 : 1); i++)
-      {
-         tv[i] = vld1q_u32(texel[i]);
-         if (tk == TK_FILTER)
-            wv[i] = vld1q_u32(w[i]);
-      }
+      tv = vld1q_u32(texel);
       for (ch = 0; ch < 3; ch++)
       {
-         const int32x4_t sh = vdupq_n_s32(-8 * ch);
-         const uint32x4_t m = vdupq_n_u32(0xff);
-         uint32x4_t t8 = vandq_u32(vshlq_u32(tv[0], sh), m);
-         if (tk == TK_FILTER)
-         {
-            uint32x4_t acc = vmlaq_u32(vdupq_n_u32(16), t8, wv[0]);
-            acc = vmlaq_u32(acc, vandq_u32(vshlq_u32(tv[1], sh), m), wv[1]);
-            acc = vmlaq_u32(acc, vandq_u32(vshlq_u32(tv[2], sh), m), wv[2]);
-            t8 = vshrq_n_u32(acc, 5);
-         }
+         uint32x4_t t8 = vandq_u32(vshlq_u32(tv, vdupq_n_s32(-8 * ch)), vdupq_n_u32(0xff));
          if (mode == SC_TEX)
             c[ch] = t8;
          else if (mode == SC_TEX_MUL_SHADE)
