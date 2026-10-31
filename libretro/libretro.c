@@ -1693,6 +1693,8 @@ void retro_deinit(void)
 {
    mupen_main_stop();
    mupen_main_exit();
+   /* Frees the RDRAM and ROM base CoreStartup allocated; a host that reloads the core needs it back. */
+   CoreShutdown();
 
    set_transfer_pak_path(&retro_transferpak_rom_path, NULL);
    set_transfer_pak_path(&retro_transferpak_ram_path, NULL);
