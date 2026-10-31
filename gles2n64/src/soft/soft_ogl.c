@@ -472,7 +472,8 @@ void soft_ogl_stop(void)
 {
    soft_mt_stop();
    soft_queue_reset(&soft_queue);
-   soft_texcache_unpin_all();
+   soft_texcache_release();
+   soft_current_tex = NULL;
 }
 
 void OGL_SwapBuffers(void)

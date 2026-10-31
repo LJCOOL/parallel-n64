@@ -49,6 +49,9 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
 
 /* Releases every entry for eviction; call after the commands using them are drawn. */
 void soft_texcache_unpin_all(void);
+
+/* Frees every cached texture; the cache refills on demand. */
+void soft_texcache_release(void);
 /* Pins a texture returned by lookup again; ignores NULL and the dummy. */
 void soft_texcache_pin(const SoftTex *tex);
 /* True when pinned entries hold the cache above its budget. */
