@@ -31,6 +31,12 @@ void soft_queue_tri(SoftQueue *q, const SoftTarget *t, const SoftVert *v0,
    c->u.tri.v[0] = *v0;
    c->u.tri.v[1] = *v1;
    c->u.tri.v[2] = *v2;
+   /* Set up once here so both replay threads share it; drop triangles that draw nothing. */
+   if (!soft_tri_prepare(&c->u.tri.setup, t, &c->u.tri.v[0], &c->u.tri.v[1], &c->u.tri.v[2], p))
+   {
+      q->count--;
+      return;
+   }
    c->u.tri.pipe = *p;
    if (p->prog)
       c->u.tri.prog = *(const SoftCombineProgram*)p->prog;
@@ -87,7 +93,7 @@ void soft_queue_replay(const SoftQueue *q, SoftTarget *t, int band)
                p.prog = &c->u.tri.prog;
             local.sx0 = c->sx0; local.sy0 = c->sy0;
             local.sx1 = c->sx1; local.sy1 = c->sy1;
-            soft_draw_tri_band(&local, &c->u.tri.v[0], &c->u.tri.v[1], &c->u.tri.v[2], &p, band);
+            soft_tri_raster(&c->u.tri.setup, &local, &p, band);
             break;
          }
          case SOFT_CMD_FILL:

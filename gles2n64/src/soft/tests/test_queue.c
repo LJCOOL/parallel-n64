@@ -57,7 +57,7 @@ static void test_queue_overflow_flushes_in_order(void)
    int i, flushes = 0;
 
    start(&a, &b);
-   for (i = 0; i < SOFT_QUEUE_MAX + 500; i++)
+   for (i = 0; i < 3 * SOFT_QUEUE_MAX; i++)
    {
       SoftVert v0 = gen_vert(), v1 = gen_vert(), v2 = gen_vert();
       if (soft_queue_full(&queue))
@@ -70,7 +70,7 @@ static void test_queue_overflow_flushes_in_order(void)
       soft_queue_tri(&queue, &b, &v0, &v1, &v2, &p);
    }
    flush(&b);
-   CHECK(flushes == 1);
+   CHECK(flushes >= 1);
    CHECK(memcmp(col_a, col_b, sizeof col_a) == 0);
    CHECK(memcmp(dep_a, dep_b, sizeof dep_a) == 0);
 }

@@ -32,6 +32,7 @@ typedef struct
          SoftVert v[3];
          SoftPipe pipe;
          SoftCombineProgram prog;
+         SoftTriSetup setup;
       } tri;
       struct
       {
