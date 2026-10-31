@@ -49,7 +49,8 @@ static void grad(SoftGrad *g, float lo, float hi, float slope)
 }
 
 /* w_lo and w_slope set perspective strength; limits are per-thousand of pixels. */
-static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_limit)
+/* tight 0 compares against the scalar span; 1 compares the tight loop with the general fixed path. */
+static void run_fixed_mode(float w_lo, float w_slope, int colour_limit, int exact_limit, int tight)
 {
    SoftTex tex;
    SoftCombineProgram prog;
@@ -117,6 +118,14 @@ static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_lim
       p.fog = (rnd() & 1);
       p.fog_color = rnd();
       p.blend = (int)((span / (SC_GENERIC + 1)) % (SB_KEEP + 1));
+      if (tight)
+      {
+         /* Opaque, unfogged, untested spans are the ones the tight loop takes. */
+         p.fog = 0;
+         p.alpha_test = 0;
+         p.blend = SB_OPAQUE;
+         p.filter = (span >> 5) & 1;
+      }
       for (i = 0; i < 4; i++)
       {
          p.prim[i] = (uint8_t)rnd();
@@ -142,7 +151,14 @@ static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_lim
       soft_target_init(&ts, col_s, dep_s, W, 1);
       soft_target_init(&tn, col_n, dep_n, W, 1);
 
-      soft_span_combine(&ts, &p, &tri, 0, x0, x0 + len);
+      if (tight)
+      {
+         soft_span_fixed_set_tight(0);
+         soft_span_fixed(&ts, &p, &tri, 0, x0, x0 + len);
+         soft_span_fixed_set_tight(1);
+      }
+      else
+         soft_span_combine(&ts, &p, &tri, 0, x0, x0 + len);
       soft_span_fixed(&tn, &p, &tri, 0, x0, x0 + len);
 
       for (i = 0; i < W; i++)
@@ -153,14 +169,34 @@ static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_lim
             colour_misses++;
          if (col_s[i] != col_n[i])
             exact_misses++;
+         if (tight && dep_s[i] != dep_n[i])
+            depth_misses += 1000;
       }
       pixels += len;
    }
    /* An alpha-tested texel flip also skips that pixel's depth write. */
+   if (tight)
+   {
+      CHECK(depth_misses == 0);
+      CHECK(exact_misses == 0);
+      printf("spans_fixed tight: %d pixels, %d inexact\n", pixels, exact_misses);
+      return;
+   }
    CHECK(depth_misses * 1000 <= pixels * (colour_limit - 1));
    CHECK(colour_misses * 1000 <= pixels * colour_limit);
    CHECK(exact_misses * 1000 <= pixels * exact_limit);
    printf("spans_fixed: %d pixels, %d colour misses, %d inexact\n", pixels, colour_misses, exact_misses);
+}
+
+static void run_fixed(float w_lo, float w_slope, int colour_limit, int exact_limit)
+{
+   run_fixed_mode(w_lo, w_slope, colour_limit, exact_limit, 0);
+}
+
+/* The tight loop must match the general fixed path bit for bit, filtered or not. */
+static void test_tight_loop_matches_general_path(void)
+{
+   run_fixed_mode(0.5f, 0.001f, 0, 0, 1);
 }
 
 /* Constant w makes the affine texture steps exact, so only rounding may differ. */
@@ -179,6 +215,7 @@ int main(void)
 {
    RUN(test_fixed_matches_scalar_affine);
    RUN(test_fixed_matches_scalar_perspective);
+   RUN(test_tight_loop_matches_general_path);
    TEST_EXIT();
 }
 
