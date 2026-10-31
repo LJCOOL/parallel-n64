@@ -54,6 +54,12 @@ static void *worker_main(void *arg)
    }
 }
 
+#ifdef __linux__
+static pthread_t caller;
+static cpu_set_t caller_mask;
+static int caller_pinned;
+#endif
+
 int soft_mt_start(void)
 {
    if (running)
@@ -66,6 +72,8 @@ int soft_mt_start(void)
    {
       /* The caller (emulation thread) takes CPU 0 and the worker CPU 1, so they never share. */
       cpu_set_t set;
+      caller = pthread_self();
+      caller_pinned = pthread_getaffinity_np(caller, sizeof(caller_mask), &caller_mask) == 0;
       CPU_ZERO(&set);
       CPU_SET(1, &set);
       pthread_setaffinity_np(worker, sizeof(set), &set);
@@ -87,6 +95,12 @@ void soft_mt_stop(void)
    pthread_cond_signal(&start_cv);
    pthread_mutex_unlock(&lock);
    pthread_join(worker, NULL);
+#ifdef __linux__
+   /* The caller is the frontend's thread too; hand back the CPUs it had. */
+   if (caller_pinned)
+      pthread_setaffinity_np(caller, sizeof(caller_mask), &caller_mask);
+   caller_pinned = 0;
+#endif
    running = 0;
 }
 
