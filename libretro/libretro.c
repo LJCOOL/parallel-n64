@@ -1706,9 +1706,11 @@ void retro_init(void)
 void retro_deinit(void)
 {
    mupen_main_stop();
+   release_r4300_dynarec(&g_dev.r4300);
    mupen_main_exit();
    /* Frees the RDRAM and ROM base CoreStartup allocated; a host that reloads the core needs it back. */
    CoreShutdown();
+   rdram_hidden_release();
 
    set_transfer_pak_path(&retro_transferpak_rom_path, NULL);
    set_transfer_pak_path(&retro_transferpak_ram_path, NULL);

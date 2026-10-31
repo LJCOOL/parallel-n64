@@ -229,6 +229,8 @@ void init_r4300(struct r4300_core* r4300, struct memory* mem, struct mi_controll
 void poweron_r4300(struct r4300_core* r4300);
 
 void run_r4300(struct r4300_core* r4300);
+/* Frees dynarec block lists when a session ends between yielded frames. */
+void release_r4300_dynarec(struct r4300_core* r4300);
 
 int64_t* r4300_regs(struct r4300_core* r4300);
 int64_t* r4300_mult_hi(struct r4300_core* r4300);

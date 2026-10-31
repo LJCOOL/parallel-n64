@@ -303,6 +303,17 @@ static int rdram_mi_modes_honoured(const struct rdram* rdram)
     return rdram->r4300->emumode != EMUMODE_DYNAREC || g_mi_window_active;
 }
 
+void rdram_hidden_release(void)
+{
+    if (g_rdram_hidden == g_rdram_hidden_own)
+    {
+        g_rdram_hidden = NULL;
+        g_rdram_hidden_size = 0;
+    }
+    free(g_rdram_hidden_own);
+    g_rdram_hidden_own = NULL;
+}
+
 static void rdram_hidden_ensure(const struct rdram* rdram)
 {
     if (g_rdram_hidden != NULL)

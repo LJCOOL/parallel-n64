@@ -122,6 +122,27 @@ void poweron_r4300(struct r4300_core* r4300)
 
 
 extern int frame_break;
+#if defined(DYNAREC)
+static int l_dyna_inited = 0;
+#endif
+
+void release_r4300_dynarec(struct r4300_core* r4300)
+{
+#if defined(DYNAREC)
+    if (!l_dyna_inited)
+        return;
+#ifdef NEW_DYNAREC
+#ifdef HAVE_DYNAREC_HACKTARUX
+    if (r4300_jit_backend != R4300_JIT_HACKTARUX)
+#endif
+        new_dynarec_cleanup();
+#endif
+    free_blocks(&r4300->cached_interp);
+    r4300->recomp.dyna_setup_started = 0; /* next ROM boots from start_address */
+    l_dyna_inited = 0; /* allow re-init for the next ROM */
+#endif
+}
+
 void run_r4300(struct r4300_core* r4300)
 {
 #ifdef OSAL_SSE
@@ -151,7 +172,6 @@ void run_r4300(struct r4300_core* r4300)
          * dynarec once, then each slice re-enters it (resuming at the seeded
          * pcaddr / recompiled address). The start call returns on frame_break
          * (yield) or on a real stop; only tear down on a real stop. */
-        static int l_dyna_inited = 0;
 #ifdef HAVE_DYNAREC_HACKTARUX
         int hacktarux = (r4300_jit_backend == R4300_JIT_HACKTARUX);
 #else
@@ -208,15 +228,7 @@ void run_r4300(struct r4300_core* r4300)
 #endif
 
         if (!frame_break)
-        {
-#ifdef NEW_DYNAREC
-            if (!hacktarux)
-                new_dynarec_cleanup();
-#endif
-            free_blocks(&r4300->cached_interp);
-            r4300->recomp.dyna_setup_started = 0; /* next ROM boots from start_address */
-            l_dyna_inited = 0; /* allow re-init for the next ROM */
-        }
+            release_r4300_dynarec(r4300);
     }
 #endif
     else /* if (r4300->emumode == EMUMODE_INTERPRETER) */
