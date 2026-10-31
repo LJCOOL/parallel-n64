@@ -116,6 +116,85 @@ static inline int tight_axis(int i, int and_mask, int max)
    return i < 0 ? 0 : (i > max ? max : i);
 }
 
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+
+/* Four lanes of a 16.16 shade channel, saturated to [0, 255]. */
+static inline __attribute__((always_inline)) uint32x4_t quad_shade(int32_t v, int32_t dv, uint32x4_t k)
+{
+   int32x4_t l = vreinterpretq_s32_u32(vmlaq_n_u32(vdupq_n_u32((uint32_t)v), k, (uint32_t)dv));
+   l = vminq_s32(vmaxq_s32(vshrq_n_s32(l, 16), vdupq_n_s32(0)), vdupq_n_s32(255));
+   return vreinterpretq_u32_s32(l);
+}
+
+static inline __attribute__((always_inline)) uint32x4_t quad_mul8(uint32x4_t x, uint32x4_t y)
+{
+   return vshrq_n_u32(vaddq_u32(vmulq_u32(x, y), vdupq_n_u32(255)), 8);
+}
+
+/* Four opaque pixels matching the scalar loop exactly; texels are fetched per lane. */
+static inline __attribute__((always_inline)) void quad_opaque(const SoftPipe *p, const uint32_t *rgba,
+      int width, int sand, int tand, int ms, int mt, const int mode, const int tk, int z_test, int z_write,
+      int bias, uint16_t *dst, uint16_t *zb, const int32_t *rgb, const int32_t *drgb,
+      uint32_t z32, uint32_t dz32, int32_t s, int32_t ds, int32_t tt, int32_t dt)
+{
+   static const uint32_t lanes[4] = { 0, 1, 2, 3 };
+   const uint32x4_t k = vld1q_u32(lanes);
+   uint32x4_t c[3], pass = vdupq_n_u32(~0u), px;
+   int32x4_t zi = vdupq_n_s32(0);
+   int ch, i;
+
+   if (z_test)
+   {
+      zi = vreinterpretq_s32_u32(vshrq_n_u32(vmlaq_n_u32(vdupq_n_u32(z32), k, dz32), 16));
+      zi = vminq_s32(vmaxq_s32(vsubq_s32(zi, vdupq_n_s32(bias)), vdupq_n_s32(0)), vdupq_n_s32(65535));
+      pass = vcleq_u32(vreinterpretq_u32_s32(zi), vmovl_u16(vld1_u16(zb)));
+      if (!(vgetq_lane_u32(pass, 0) | vgetq_lane_u32(pass, 1) | vgetq_lane_u32(pass, 2) | vgetq_lane_u32(pass, 3)))
+         return;
+   }
+   if (tk != TK_NONE)
+   {
+      uint32_t texel[4];
+      uint32x4_t tv;
+      for (i = 0; i < 4; i++)
+      {
+         int32_t ls = (int32_t)((uint32_t)s + (uint32_t)ds * i), lt = (int32_t)((uint32_t)tt + (uint32_t)dt * i);
+         int si = ls >> 16, ti = lt >> 16;
+         if (tk == TK_FILTER)
+            texel[i] = soft_filter3_at(rgba, width, tight_axis(si, sand, ms), tight_axis(si + 1, sand, ms),
+                  tight_axis(ti, tand, mt), tight_axis(ti + 1, tand, mt), (ls >> 11) & 31, (lt >> 11) & 31);
+         else
+            texel[i] = rgba[tight_axis(ti, tand, mt) * width + tight_axis(si, sand, ms)];
+      }
+      tv = vld1q_u32(texel);
+      for (ch = 0; ch < 3; ch++)
+      {
+         uint32x4_t t8 = vandq_u32(vshlq_u32(tv, vdupq_n_s32(-8 * ch)), vdupq_n_u32(0xff));
+         if (mode == SC_TEX)
+            c[ch] = t8;
+         else if (mode == SC_TEX_MUL_SHADE)
+            c[ch] = quad_mul8(t8, quad_shade(rgb[ch], drgb[ch], k));
+         else if (mode == SC_TEX_MUL_PRIM)
+            c[ch] = quad_mul8(t8, vdupq_n_u32(p->prim[ch]));
+         else
+            c[ch] = quad_mul8(t8, vdupq_n_u32(p->env[ch]));
+      }
+   }
+   else
+      for (ch = 0; ch < 3; ch++)
+         c[ch] = quad_shade(rgb[ch], drgb[ch], k);
+
+   px = vorrq_u32(vorrq_u32(vshlq_n_u32(vshrq_n_u32(c[0], 3), 11), vshlq_n_u32(vshrq_n_u32(c[1], 2), 5)),
+         vshrq_n_u32(c[2], 3));
+   {
+      uint16x4_t m = vmovn_u32(pass);
+      vst1_u16(dst, vbsl_u16(m, vmovn_u32(px), vld1_u16(dst)));
+      if (z_write)
+         vst1_u16(zb, vbsl_u16(m, vmovn_u32(vreinterpretq_u32_s32(zi)), vld1_u16(zb)));
+   }
+}
+#endif
+
 /* Integer span: 16.16 colour, texture and depth steps; inlined once per constant mode. */
 static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int mode,
@@ -203,6 +282,19 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          dt = (te - tt) >> SEG_SHIFT;
       }
 
+#ifdef __ARM_NEON
+      /* Opaque tight spans draw four pixels per step; quads never straddle a texture segment. */
+      if (simple == 1 && tk != TK_RUNTIME && z_fast && !(k & 3) && x + 4 <= x1)
+      {
+         const int32_t rgb[3] = { r, g, b }, drgb[3] = { dr, dg, db };
+         quad_opaque(p, rgba, width, sand, tand, ms, mt, mode, tk, z_test, z_write, bias,
+               dst + x, zb + x, rgb, drgb, z32, dz32, s, ds, tt, dt);
+         r += 4 * dr; g += 4 * dg; b += 4 * db; a += 4 * da; f += 4 * df;
+         z32 += 4 * dz32; s += 4 * ds; tt += 4 * dt;
+         x += 3;
+         continue;
+      }
+#endif
       if (z_test)
       {
          zi = (z_fast ? (int)(z32 >> 16) : (int)(z >> 16)) - bias;

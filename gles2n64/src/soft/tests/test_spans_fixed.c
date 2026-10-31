@@ -147,6 +147,14 @@ static void run_fixed_mode(float w_lo, float w_slope, int colour_limit, int exac
          col_s[i] = col_n[i] = (uint16_t)rnd();
          dep_s[i] = dep_n[i] = (uint16_t)rnd();
       }
+      if (tight && span % 3 == 0)
+      {
+         /* Flat depth equal to the buffer exercises the depth test's tie. */
+         tri.z.c = 30000.0f;
+         tri.z.dx = 0.0f;
+         for (i = 0; i < W; i++)
+            dep_s[i] = dep_n[i] = (uint16_t)(30000 - (p.decal ? SOFT_DECAL_BIAS : 0));
+      }
       soft_target_init(&ts, col_s, dep_s, W, 1);
       soft_target_init(&tn, col_n, dep_n, W, 1);
 
