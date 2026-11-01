@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "test.h"
@@ -150,6 +151,103 @@ static void test_fog_blend(void)
    CHECK(b >= 120 && b <= 136);
 }
 
+
+static void set_cycle(SoftCombineProgram *p, int cy, int k, int a, int b, int c, int d)
+{
+   p->sel[cy][k][0] = (uint8_t)a; p->sel[cy][k][1] = (uint8_t)b;
+   p->sel[cy][k][2] = (uint8_t)c; p->sel[cy][k][3] = (uint8_t)d;
+}
+
+/* Folded programs on folded shade match the generic combiner within rounding, or decline. */
+static void test_fold_matches_generic(void)
+{
+   static const int pool[] = { COMBINED, TEXEL0, PRIMITIVE, SHADE, ENVIRONMENT, ONE, ZERO,
+      TEXEL0_ALPHA, PRIMITIVE_ALPHA, SHADE_ALPHA, ENV_ALPHA, COMBINED_ALPHA, PRIM_LOD_FRAC };
+   uint32_t seed = 99;
+   int n, ch, folded = 0, worst = 0;
+   for (n = 0; n < 20000; n++)
+   {
+      SoftCombineProgram orig, fp;
+      SoftCombineInputs in, fin;
+      SoftCombineFold fold;
+      uint32_t want, got;
+      int cy, k, i;
+      memset(&orig, 0, sizeof(orig));
+      orig.mode = SC_GENERIC;
+      orig.cycles = 1 + (n & 1);
+      for (cy = 0; cy < 2; cy++)
+         for (k = 0; k < 2; k++)
+            for (i = 0; i < 4; i++)
+            {
+               seed = seed * 1664525u + 1013904223u;
+               /* Bias towards ZERO so foldable shapes are common. */
+               orig.sel[cy][k][i] = (uint8_t)((seed >> 28) < 6 ? ZERO
+                     : pool[(seed >> 8) % (sizeof(pool) / sizeof(pool[0]))]);
+            }
+      memset(&in, 0, sizeof(in));
+      for (ch = 0; ch < 4; ch++)
+      {
+         seed = seed * 1664525u + 1013904223u;
+         in.tex0[ch] = (uint8_t)(seed >> 8); in.shade[ch] = (uint8_t)(seed >> 16);
+         in.prim[ch] = (uint8_t)(seed >> 24); in.env[ch] = (uint8_t)(seed >> 4);
+      }
+      in.prim_lod = (uint8_t)(seed >> 12);
+      in.prog = &orig;
+      want = soft_combine_generic(&in);
+      fp = orig;
+      if (!soft_combine_fold(&fp, in.prim, in.env, in.prim_lod, &fold))
+         continue;
+      folded++;
+      CHECK(fp.mode != SC_GENERIC && fp.cycles == 1);
+      fin = in;
+      fin.prog = &fp;
+      soft_combine_fold_shade(&fold, fin.shade);
+      got = soft_combine_eval(&fin);
+      for (ch = 0; ch < 4; ch++)
+      {
+         int d = abs((int)((want >> (ch * 8)) & 0xff) - (int)((got >> (ch * 8)) & 0xff));
+         if (d > worst)
+            worst = d;
+      }
+   }
+   CHECK(folded > 500);
+   CHECK(worst <= 3);
+   printf("fold: %d of 20000 folded, worst channel error %d\n", folded, worst);
+}
+
+/* Constant fills and texture-shade-prim products fold; a texel1 lerp does not. */
+static void test_fold_common_programs(void)
+{
+   static const uint8_t prim[4] = { 10, 20, 30, 40 }, env[4] = { 1, 2, 3, 4 };
+   SoftCombineProgram p;
+   SoftCombineFold f;
+
+   memset(&p, 0, sizeof(p));
+   p.mode = SC_GENERIC; p.cycles = 1;
+   set_cycle(&p, 0, 0, ZERO, ZERO, ZERO, PRIMITIVE);
+   set_cycle(&p, 0, 1, ZERO, ZERO, ZERO, PRIMITIVE_ALPHA);
+   CHECK(soft_combine_fold(&p, prim, env, 0, &f));
+   CHECK(p.mode == SC_SHADE && p.amode == SA_SAME && !p.uses_tex);
+   CHECK(f.src[0] < 0 && f.k[0] == 10 && f.k[3] == 40);
+
+   memset(&p, 0, sizeof(p));
+   p.mode = SC_GENERIC; p.cycles = 2;
+   set_cycle(&p, 0, 0, TEXEL0, ZERO, SHADE, ZERO);
+   set_cycle(&p, 0, 1, ZERO, ZERO, ZERO, TEXEL0);
+   set_cycle(&p, 1, 0, COMBINED, ZERO, PRIMITIVE, ZERO);
+   set_cycle(&p, 1, 1, ZERO, ZERO, ZERO, COMBINED);
+   CHECK(soft_combine_fold(&p, prim, env, 0, &f));
+   CHECK(p.mode == SC_TEX_MUL_SHADE && p.amode == SA_SAME && p.uses_tex);
+   CHECK(f.src[0] == 0 && f.k[0] == 10 && f.src[3] < 0 && f.k[3] == 255);
+
+   memset(&p, 0, sizeof(p));
+   p.mode = SC_GENERIC; p.cycles = 1; p.uses_tex1 = 1;
+   set_cycle(&p, 0, 0, TEXEL1, TEXEL0, ENV_ALPHA, TEXEL0);
+   set_cycle(&p, 0, 1, ZERO, ZERO, ZERO, ONE);
+   CHECK(!soft_combine_fold(&p, prim, env, 0, &f));
+   CHECK(p.mode == SC_GENERIC);
+}
+
 int main(void)
 {
    RUN(test_classify_tex_mul_shade);
@@ -160,5 +258,7 @@ int main(void)
    RUN(test_alpha_cutout);
    RUN(test_fog_blend);
    RUN(test_two_cycle_passthrough_uses_first_cycle);
+   RUN(test_fold_matches_generic);
+   RUN(test_fold_common_programs);
    TEST_EXIT();
 }

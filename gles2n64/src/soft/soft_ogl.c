@@ -61,9 +61,26 @@ static void soft_flush(void)
    soft_queue_reset(&soft_queue);
 }
 
+static SoftCombineFold soft_fold;
+static int soft_folded;
+
+static void soft_fold_vert(const SoftVert *in, SoftVert *out)
+{
+   uint8_t c[4] = { in->r, in->g, in->b, in->a };
+   *out = *in;
+   soft_combine_fold_shade(&soft_fold, c);
+   out->r = c[0]; out->g = c[1]; out->b = c[2]; out->a = c[3];
+}
+
 static void soft_record_tri(const SoftVert *v0, const SoftVert *v1, const SoftVert *v2,
       const SoftPipe *p)
 {
+   SoftVert f[3];
+   if (soft_folded)
+   {
+      soft_fold_vert(v0, &f[0]); soft_fold_vert(v1, &f[1]); soft_fold_vert(v2, &f[2]);
+      v0 = &f[0]; v1 = &f[1]; v2 = &f[2];
+   }
    /* Flushing unpins textures, so pin this one again after any flush. */
    if (soft_queue_full(&soft_queue) || soft_texcache_over_budget())
       soft_flush();
@@ -240,6 +257,7 @@ static void build_pipe(SoftPipe *p, bool *textured, float tex_base)
    p->env[0]  = soft_u8(gDP.envColor.r);  p->env[1]  = soft_u8(gDP.envColor.g);
    p->env[2]  = soft_u8(gDP.envColor.b);  p->env[3]  = soft_u8(gDP.envColor.a);
    p->prim_lod = soft_u8(gDP.primColor.l);
+   soft_folded = soft_combine_fold(&soft_prog, p->prim, p->env, p->prim_lod, &soft_fold);
 
    *textured = gDP.otherMode.cycleType != G_CYC_FILL && soft_prog.uses_tex;
    if (*textured)

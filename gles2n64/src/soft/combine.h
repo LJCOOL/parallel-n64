@@ -79,6 +79,20 @@ SoftCombineMode soft_combine_classify(const DecodedMux *m);
 /* Compiles a decoded mux; two_cycle selects whether cycle 2 runs. */
 void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram *out);
 
+/* Vertex shade rewrite: channel c becomes k[c], scaled by shade channel src[c] when src[c] >= 0. */
+typedef struct
+{
+   uint8_t k[4];
+   int8_t src[4];
+} SoftCombineFold;
+
+/* Rewrites a generic program into one fast cycle using draw constants; returns 0, prog untouched, when impossible. */
+int soft_combine_fold(SoftCombineProgram *prog, const uint8_t prim[4], const uint8_t env[4],
+      uint8_t prim_lod, SoftCombineFold *fold);
+
+/* Replaces one vertex's RGBA shade with its folded value. */
+void soft_combine_fold_shade(const SoftCombineFold *fold, uint8_t rgba[4]);
+
 /* Evaluates the program; returns R | G << 8 | B << 16 | A << 24. */
 uint32_t soft_combine_generic(const SoftCombineInputs *in);
 

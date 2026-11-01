@@ -201,6 +201,154 @@ void soft_combine_compile(const DecodedMux *m, int two_cycle, SoftCombineProgram
    out->uses_tex1  = uses(out, TEXEL1, TEXEL1);
 }
 
+/* A per-pixel value k, times shade channel s and texel0 channel t when each is >= 0. */
+typedef struct
+{
+   int ok;
+   int k;
+   int s, t;
+} FoldTerm;
+
+static const FoldTerm fold_bad = { 0, 0, -1, -1 };
+
+static FoldTerm fold_const(int k)
+{
+   FoldTerm r = { 1, k, -1, -1 };
+   return r;
+}
+
+static int fold_is_const(FoldTerm x, int k)
+{
+   return x.ok && x.s < 0 && x.t < 0 && x.k == k;
+}
+
+static FoldTerm fold_input(int sel, int ch, const FoldTerm *combined, const uint8_t *prim,
+      const uint8_t *env, uint8_t prim_lod)
+{
+   FoldTerm r = { 1, 255, -1, -1 };
+   switch (sel)
+   {
+      case COMBINED:        return combined[ch];
+      case COMBINED_ALPHA:  return combined[3];
+      case TEXEL0:          r.t = ch; return r;
+      case TEXEL0_ALPHA:    r.t = 3; return r;
+      case SHADE:           r.s = ch; return r;
+      case SHADE_ALPHA:     r.s = 3; return r;
+      case PRIMITIVE:       return fold_const(prim[ch]);
+      case PRIMITIVE_ALPHA: return fold_const(prim[3]);
+      case ENVIRONMENT:     return fold_const(env[ch]);
+      case ENV_ALPHA:       return fold_const(env[3]);
+      case PRIM_LOD_FRAC:   return fold_const(prim_lod);
+      case ONE:             return fold_const(255);
+      case ZERO:            return fold_const(0);
+      default:              return fold_bad;
+   }
+}
+
+/* (a - b) * c + d, keeping texel0 and shade each to at most one factor. */
+static FoldTerm fold_cycle(FoldTerm a, FoldTerm b, FoldTerm c, FoldTerm d)
+{
+   FoldTerm x;
+   if (!a.ok || !b.ok || !c.ok || !d.ok)
+      return fold_bad;
+   if (fold_is_const(b, 0))
+      x = a;
+   else if (a.s == b.s && a.t == b.t && a.k == b.k)
+      x = fold_const(0);
+   else if (a.s < 0 && a.t < 0 && b.s < 0 && b.t < 0 && a.k >= b.k)
+      x = fold_const(a.k - b.k);
+   else
+      return fold_bad;
+   if (fold_is_const(x, 0) || fold_is_const(c, 0))
+      x = fold_const(0);
+   else
+   {
+      if ((x.s >= 0 && c.s >= 0) || (x.t >= 0 && c.t >= 0))
+         return fold_bad;
+      x.k = (x.k * c.k * 257 + 32768) >> 16;
+      x.s = x.s >= 0 ? x.s : c.s;
+      x.t = x.t >= 0 ? x.t : c.t;
+   }
+   if (fold_is_const(d, 0))
+      return x;
+   if (fold_is_const(x, 0))
+      return d;
+   if (x.s < 0 && x.t < 0 && d.s < 0 && d.t < 0)
+      return fold_const(x.k + d.k > 255 ? 255 : x.k + d.k);
+   /* Like terms add their scales while the sum cannot saturate. */
+   if (x.s == d.s && x.t == d.t && x.k + d.k <= 255)
+   {
+      x.k += d.k;
+      return x;
+   }
+   return fold_bad;
+}
+
+int soft_combine_fold(SoftCombineProgram *prog, const uint8_t prim[4], const uint8_t env[4],
+      uint8_t prim_lod, SoftCombineFold *fold)
+{
+   FoldTerm combined[4], out[4];
+   int cy, ch, rgb_tex;
+
+   if (prog->mode != SC_GENERIC || prog->uses_tex1)
+      return 0;
+   for (ch = 0; ch < 4; ch++)
+      combined[ch] = fold_const(0);
+   for (cy = 0; cy < prog->cycles; cy++)
+   {
+      for (ch = 0; ch < 4; ch++)
+      {
+         const uint8_t *s = prog->sel[cy][ch == 3];
+         out[ch] = fold_cycle(fold_input(s[0], ch, combined, prim, env, prim_lod),
+               fold_input(s[1], ch, combined, prim, env, prim_lod),
+               fold_input(s[2], ch, combined, prim, env, prim_lod),
+               fold_input(s[3], ch, combined, prim, env, prim_lod));
+         if (!out[ch].ok)
+            return 0;
+      }
+      for (ch = 0; ch < 4; ch++)
+         combined[ch] = out[ch];
+   }
+   /* Fast colour modes multiply each channel by its own texel, or by none on all three. */
+   rgb_tex = combined[0].t >= 0;
+   for (ch = 0; ch < 4; ch++)
+   {
+      if (ch < 3 && (combined[ch].t >= 0) != rgb_tex)
+         return 0;
+      if (combined[ch].t >= 0 && combined[ch].t != ch)
+         return 0;
+      fold->k[ch] = (uint8_t)combined[ch].k;
+      fold->src[ch] = (int8_t)combined[ch].s;
+   }
+   prog->cycles = 1;
+   prog->mode = rgb_tex ? SC_TEX_MUL_SHADE : SC_SHADE;
+   if ((combined[3].t >= 0) == rgb_tex)
+      prog->amode = SA_SAME;
+   else
+      prog->amode = combined[3].t >= 0 ? SA_TEX_MUL_SHADE : SA_SHADE;
+   prog->uses_tex = rgb_tex || combined[3].t >= 0;
+   prog->uses_shade = 1;
+   for (ch = 0; ch < 2; ch++)
+   {
+      prog->sel[0][ch][0] = (ch ? combined[3].t >= 0 : rgb_tex) ? TEXEL0 : SHADE;
+      prog->sel[0][ch][1] = ZERO;
+      prog->sel[0][ch][2] = (ch ? combined[3].t >= 0 : rgb_tex) ? SHADE : ONE;
+      prog->sel[0][ch][3] = ZERO;
+   }
+   return 1;
+}
+
+void soft_combine_fold_shade(const SoftCombineFold *fold, uint8_t rgba[4])
+{
+   uint8_t in[4];
+   int ch;
+   for (ch = 0; ch < 4; ch++)
+      in[ch] = rgba[ch];
+   for (ch = 0; ch < 4; ch++)
+      rgba[ch] = fold->src[ch] < 0 ? fold->k[ch]
+            : (uint8_t)((in[fold->src[ch]] * fold->k[ch] * 257 + 32768) >> 16);
+}
+
 static int input(const SoftCombineInputs *in, const uint8_t *combined, int sel, int ch)
 {
    switch (sel)
