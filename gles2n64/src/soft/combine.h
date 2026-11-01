@@ -17,7 +17,9 @@ typedef enum
    SC_TEX_MUL_PRIM,
    SC_TEX_MUL_ENV,
    SC_LERP_ENV_PRIM,
-   SC_GENERIC
+   SC_GENERIC,
+   /* (TEXEL1 - TEXEL0) * K + TEXEL0, times shade; K is cycle 0's colour C selector. Only folding produces it. */
+   SC_TEX_LERP_MUL_SHADE
 } SoftCombineMode;
 
 /* Alpha source when it differs from the colour mode; SA_SAME follows the colour mode. */

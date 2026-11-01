@@ -223,9 +223,12 @@ static int fold_is_const(FoldTerm x, int k)
 }
 
 static FoldTerm fold_input(int sel, int ch, const FoldTerm *combined, const uint8_t *prim,
-      const uint8_t *env, uint8_t prim_lod)
+      const uint8_t *env, uint8_t prim_lod, int lerp)
 {
    FoldTerm r = { 1, 255, -1, -1 };
+   /* Once texel0 names the blended texel, raw texel0 reads cannot fold. */
+   if (lerp && (sel == TEXEL0 || sel == TEXEL0_ALPHA))
+      return fold_bad;
    switch (sel)
    {
       case COMBINED:        return combined[ch];
@@ -288,10 +291,23 @@ int soft_combine_fold(SoftCombineProgram *prog, const uint8_t prim[4], const uin
       uint8_t prim_lod, SoftCombineFold *fold)
 {
    FoldTerm combined[4], out[4];
-   int cy, ch, rgb_tex;
+   int cy, ch, rgb_tex, lerp = 0;
+   const uint8_t *c0 = prog->sel[0][0];
 
-   if (prog->mode != SC_GENERIC || prog->uses_tex1)
+   if (prog->mode != SC_GENERIC)
       return 0;
+   if (prog->uses_tex1)
+   {
+      /* A constant-weight texel blend in cycle 0 colour stands in for texel0 from cycle 1 on. */
+      FoldTerm k;
+      if (prog->cycles != 2 || c0[0] != TEXEL1 || c0[1] != TEXEL0 || c0[3] != TEXEL0
+            || c0[2] == COMBINED || c0[2] == COMBINED_ALPHA)
+         return 0;
+      k = fold_input(c0[2], 0, NULL, prim, env, prim_lod, 0);
+      if (!k.ok || k.s >= 0 || k.t >= 0)
+         return 0;
+      lerp = 1;
+   }
    for (ch = 0; ch < 4; ch++)
       combined[ch] = fold_const(0);
    for (cy = 0; cy < prog->cycles; cy++)
@@ -299,10 +315,16 @@ int soft_combine_fold(SoftCombineProgram *prog, const uint8_t prim[4], const uin
       for (ch = 0; ch < 4; ch++)
       {
          const uint8_t *s = prog->sel[cy][ch == 3];
-         out[ch] = fold_cycle(fold_input(s[0], ch, combined, prim, env, prim_lod),
-               fold_input(s[1], ch, combined, prim, env, prim_lod),
-               fold_input(s[2], ch, combined, prim, env, prim_lod),
-               fold_input(s[3], ch, combined, prim, env, prim_lod));
+         if (lerp && cy == 0 && ch < 3)
+         {
+            FoldTerm t = { 1, 255, -1, ch };
+            out[ch] = t;
+            continue;
+         }
+         out[ch] = fold_cycle(fold_input(s[0], ch, combined, prim, env, prim_lod, lerp),
+               fold_input(s[1], ch, combined, prim, env, prim_lod, lerp),
+               fold_input(s[2], ch, combined, prim, env, prim_lod, lerp),
+               fold_input(s[3], ch, combined, prim, env, prim_lod, lerp));
          if (!out[ch].ok)
             return 0;
       }
@@ -319,6 +341,20 @@ int soft_combine_fold(SoftCombineProgram *prog, const uint8_t prim[4], const uin
          return 0;
       fold->k[ch] = (uint8_t)combined[ch].k;
       fold->src[ch] = (int8_t)combined[ch].s;
+   }
+   if (lerp)
+   {
+      /* Keep cycle 0's blend so the generic evaluator still matches; alpha comes from shade. */
+      if (!rgb_tex || combined[3].t >= 0)
+         return 0;
+      prog->mode = SC_TEX_LERP_MUL_SHADE;
+      prog->amode = SA_SHADE;
+      prog->uses_tex = 1;
+      prog->uses_shade = 1;
+      prog->sel[0][1][0] = ZERO; prog->sel[0][1][1] = ZERO; prog->sel[0][1][2] = ZERO; prog->sel[0][1][3] = SHADE;
+      prog->sel[1][0][0] = COMBINED; prog->sel[1][0][1] = ZERO; prog->sel[1][0][2] = SHADE; prog->sel[1][0][3] = ZERO;
+      prog->sel[1][1][0] = ZERO; prog->sel[1][1][1] = ZERO; prog->sel[1][1][2] = ZERO; prog->sel[1][1][3] = COMBINED;
+      return 1;
    }
    prog->cycles = 1;
    prog->mode = rgb_tex ? SC_TEX_MUL_SHADE : SC_SHADE;

@@ -259,9 +259,77 @@ static void test_texel1_samples_second_tile(void)
       CHECK(col_n[i] == 0x07e0);
 }
 
+
+/* The folded texel blend draws exactly what the generic two-cycle program draws. */
+static void test_folded_texel_blend_matches_generic(void)
+{
+   static uint16_t rgb0[64], rgb1[64], cg[W], cf[W], dg[W], df[W];
+   static uint32_t rgba0[64], rgba1[64];
+   static uint8_t a0[64], a1[64];
+   SoftTex t0, t1;
+   SoftCombineProgram gen, fold;
+   SoftCombineFold f;
+   SoftTarget tg, tf;
+   SoftPipe p;
+   SoftTri tri, ftri;
+   int i, run, misses = 0;
+
+   for (run = 0; run < 200; run++)
+   {
+      uint8_t shade[4];
+      for (i = 0; i < 64; i++)
+      {
+         rgb0[i] = (uint16_t)rnd(); rgb1[i] = (uint16_t)rnd();
+         a0[i] = (uint8_t)rnd(); a1[i] = (uint8_t)rnd();
+      }
+      memset(&t0, 0, sizeof(t0)); memset(&t1, 0, sizeof(t1));
+      t0.rgb = rgb0; t0.a = a0; t0.rgba = rgba0; t0.w = 8; t0.h = 8;
+      t1.rgb = rgb1; t1.a = a1; t1.rgba = rgba1; t1.w = 8; t1.h = 8;
+      t0.mask_s = t0.mask_t = t1.mask_s = t1.mask_t = 7;
+      soft_tex_expand(&t0); soft_tex_expand(&t1);
+
+      memset(&gen, 0, sizeof(gen));
+      gen.mode = SC_GENERIC; gen.cycles = 2; gen.uses_tex = gen.uses_tex1 = gen.uses_shade = 1;
+      gen.sel[0][0][0] = TEXEL1; gen.sel[0][0][1] = TEXEL0; gen.sel[0][0][2] = ENV_ALPHA; gen.sel[0][0][3] = TEXEL0;
+      gen.sel[0][1][0] = ZERO; gen.sel[0][1][1] = ZERO; gen.sel[0][1][2] = ZERO; gen.sel[0][1][3] = ONE;
+      gen.sel[1][0][0] = COMBINED; gen.sel[1][0][1] = ZERO; gen.sel[1][0][2] = SHADE; gen.sel[1][0][3] = ZERO;
+      gen.sel[1][1][0] = COMBINED; gen.sel[1][1][1] = ZERO; gen.sel[1][1][2] = PRIMITIVE_ALPHA; gen.sel[1][1][3] = ZERO;
+
+      memset(&p, 0, sizeof(p));
+      p.tex = &t0; p.tex1 = &t1; p.filter = run & 1;
+      p.tex1_ks = p.tex1_kt = 1 << 16; p.tex1_os = 3 << 16;
+      p.blend = (run & 2) ? SB_ALPHA : SB_OPAQUE;
+      for (i = 0; i < 4; i++) { p.prim[i] = (uint8_t)rnd(); p.env[i] = (uint8_t)rnd(); }
+      fold = gen;
+      CHECK(soft_combine_fold(&fold, p.prim, p.env, p.prim_lod, &f));
+      CHECK(fold.mode == SC_TEX_LERP_MUL_SHADE);
+
+      /* Flat shade, so folding it once matches folding every vertex. */
+      memset(&tri, 0, sizeof(tri));
+      tri.w.c = 1.0f; tri.sw.dx = 0.37f; tri.tw.c = 2.5f; tri.tw.dx = 0.21f;
+      for (i = 0; i < 4; i++) shade[i] = (uint8_t)rnd();
+      tri.r.c = shade[0]; tri.g.c = shade[1]; tri.b.c = shade[2]; tri.a.c = shade[3];
+      ftri = tri;
+      soft_combine_fold_shade(&f, shade);
+      ftri.r.c = shade[0]; ftri.g.c = shade[1]; ftri.b.c = shade[2]; ftri.a.c = shade[3];
+
+      for (i = 0; i < W; i++) { cg[i] = cf[i] = (uint16_t)rnd(); dg[i] = df[i] = 0; }
+      soft_target_init(&tg, cg, dg, W, 1);
+      soft_target_init(&tf, cf, df, W, 1);
+      p.prog = &gen;
+      soft_span_fixed(&tg, &p, &tri, 0, 0, 40);
+      p.prog = &fold;
+      soft_span_fixed(&tf, &p, &ftri, 0, 0, 40);
+      for (i = 0; i < W; i++)
+         misses += !lsb_close(cg[i], cf[i]);
+   }
+   CHECK(misses == 0);
+}
+
 int main(void)
 {
    RUN(test_texel1_samples_second_tile);
+   RUN(test_folded_texel_blend_matches_generic);
    RUN(test_fixed_matches_scalar_affine);
    RUN(test_fixed_matches_scalar_perspective);
    RUN(test_tight_loop_matches_general_path);

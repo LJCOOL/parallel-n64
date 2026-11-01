@@ -99,6 +99,31 @@ static inline void eval_generic(const GenericPlan *g, uint8_t *v, int *c)
       c[ch] = v[R_COMB * 4 + ch];
 }
 
+/* Tile 1 texel at tile 0's 16.16 coordinates mapped through the pipe's scale and offset. */
+static inline uint32_t fetch_tex1(const SoftPipe *p, const SoftTex *tex1, int32_t s, int32_t tt, int filter)
+{
+   int32_t s1 = (int32_t)(((int64_t)s * p->tex1_ks) >> 16) + p->tex1_os;
+   int32_t t1 = (int32_t)(((int64_t)tt * p->tex1_kt) >> 16) + p->tex1_ot;
+   return filter ? soft_tex_filter3(tex1, s1, t1)
+      : tex1->rgba[wrap_texel(t1 >> 16, tex1->h, tex1->wrap_t) * tex1->w
+         + wrap_texel(s1 >> 16, tex1->w, tex1->wrap_s)];
+}
+
+/* Draw-constant blend weight for one channel; folding admits only constant selectors. */
+static int lerp_weight(const SoftPipe *p, int sel, int ch)
+{
+   switch (sel)
+   {
+      case PRIMITIVE:       return p->prim[ch];
+      case PRIMITIVE_ALPHA: return p->prim[3];
+      case ENVIRONMENT:     return p->env[ch];
+      case ENV_ALPHA:       return p->env[3];
+      case PRIM_LOD_FRAC:   return p->prim_lod;
+      case ONE:             return 255;
+      default:              return 0;
+   }
+}
+
 /* Texture fetch chosen per span: run-time checks, none, or branchless wrap-or-clamp point or filtered. */
 enum { TK_RUNTIME, TK_NONE, TK_POINT, TK_FILTER };
 
@@ -202,7 +227,9 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
 {
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
    const SoftTex *tex = p->tex;
-   const SoftTex *tex1 = mode == SC_GENERIC && tk == TK_RUNTIME && prog->uses_tex ? p->tex1 : NULL;
+   const int lerp = mode == SC_TEX_LERP_MUL_SHADE;
+   const SoftTex *tex1 = (mode == SC_GENERIC || lerp) && tk == TK_RUNTIME && prog->uses_tex ? p->tex1 : NULL;
+   int lk[3] = { 0, 0, 0 };
    uint16_t *dst = t->color + y * t->width;
    uint16_t *zb  = t->depth + y * t->width;
    float fx = x0 + 0.5f, fy = y + 0.5f;
@@ -258,6 +285,10 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          v[R_LOD * 4 + ch]  = p->prim_lod;
       }
    }
+
+   if (lerp)
+      for (ch = 0; ch < 3; ch++)
+         lk[ch] = lerp_weight(p, prog->sel[0][0][2], ch);
 
    soft_stats_count_path(mode == SC_GENERIC, x1 - x0);
    if (mode == SC_GENERIC)
@@ -347,14 +378,23 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          case SC_TEX_MUL_ENV:
             for (ch = 0; ch < 4; ch++) c[ch] = mul8(tx[ch], p->env[ch]);
             break;
+         case SC_TEX_LERP_MUL_SHADE:
+         {
+            /* Generic combiner arithmetic, so results match it exactly. */
+            uint32_t texel1 = tex1 ? fetch_tex1(p, tex1, s, tt, filter)
+               : (uint32_t)tx[0] | (uint32_t)tx[1] << 8 | (uint32_t)tx[2] << 16;
+            for (ch = 0; ch < 3; ch++)
+            {
+               int l = (((((int)(texel1 >> (8 * ch)) & 0xff) - tx[ch]) * lk[ch] * 257 + 32768) >> 16) + tx[ch];
+               l = l < 0 ? 0 : (l > 255 ? 255 : l);
+               c[ch] = (l * sh[ch] * 257 + 32768) >> 16;
+            }
+            break;
+         }
          default:
             if (tex1)
             {
-               int32_t s1 = (int32_t)(((int64_t)s * p->tex1_ks) >> 16) + p->tex1_os;
-               int32_t t1 = (int32_t)(((int64_t)tt * p->tex1_kt) >> 16) + p->tex1_ot;
-               uint32_t texel1 = filter ? soft_tex_filter3(tex1, s1, t1)
-                  : tex1->rgba[wrap_texel(t1 >> 16, tex1->h, tex1->wrap_t) * tex1->w
-                     + wrap_texel(s1 >> 16, tex1->w, tex1->wrap_s)];
+               uint32_t texel1 = fetch_tex1(p, tex1, s, tt, filter);
                for (ch = 0; ch < 4; ch++)
                   v[R_TEX1 * 4 + ch] = (uint8_t)(texel1 >> (8 * ch));
             }
@@ -443,7 +483,7 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
    const SoftTex *tex = p->tex;
    int tk = TK_RUNTIME;
    /* Opaque spans never read alpha, so the alpha mode and alpha-only texture use drop out. */
-   if (tight_enabled && nofx && prog->mode != SC_GENERIC)
+   if (tight_enabled && nofx && prog->mode < SC_GENERIC)
    {
       if (opaque ? prog->mode == SC_SHADE : !prog->uses_tex)
          tk = TK_NONE;
@@ -490,6 +530,10 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       MODE(SC_TEX_MUL_SHADE);
       MODE(SC_TEX_MUL_PRIM);
       MODE(SC_TEX_MUL_ENV);
+      case SC_TEX_LERP_MUL_SHADE:
+         if (simple) span_mode(t, p, tri, y, x0, x1, SC_TEX_LERP_MUL_SHADE, SA_SHADE, 1, TK_RUNTIME);
+         else span_mode(t, p, tri, y, x0, x1, SC_TEX_LERP_MUL_SHADE, SA_SHADE, 0, TK_RUNTIME);
+         break;
       default:
          if (simple) span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME, 1, TK_RUNTIME);
          else span_mode(t, p, tri, y, x0, x1, SC_GENERIC, SA_SAME, 0, TK_RUNTIME);
