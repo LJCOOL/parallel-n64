@@ -18,6 +18,9 @@ void soft_stats_begin(void);
 void soft_stats_end(void);
 void soft_stats_frame(void);
 
+/* Texture filtering: 0 dithered single tap, 1 N64 three-point, 2 nearest. */
+void soft_set_tex_filter(int mode);
+
 #ifdef __cplusplus
 }
 #endif

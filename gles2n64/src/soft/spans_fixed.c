@@ -161,7 +161,8 @@ static inline __attribute__((always_inline)) uint32x4_t quad_mul8(uint32x4_t x, 
 static inline __attribute__((always_inline)) void quad_opaque(const SoftPipe *p, const uint32_t *rgba,
       int width, int sand, int tand, int ms, int mt, const int mode, const int tk, int z_test, int z_write,
       int bias, uint16_t *dst, uint16_t *zb, const int32_t *rgb, const int32_t *drgb,
-      uint32_t z32, uint32_t dz32, int32_t s, int32_t ds, int32_t tt, int32_t dt)
+      uint32_t z32, uint32_t dz32, int32_t s, int32_t ds, int32_t tt, int32_t dt,
+      const int32_t *js, const int32_t *jt, int par)
 {
    static const uint32_t lanes[4] = { 0, 1, 2, 3 };
    const uint32x4_t k = vld1q_u32(lanes);
@@ -183,7 +184,8 @@ static inline __attribute__((always_inline)) void quad_opaque(const SoftPipe *p,
       uint32x4_t tv;
       for (i = 0; i < 4; i++)
       {
-         int32_t ls = (int32_t)((uint32_t)s + (uint32_t)ds * i), lt = (int32_t)((uint32_t)tt + (uint32_t)dt * i);
+         int32_t ls = (int32_t)((uint32_t)s + (uint32_t)ds * i + (uint32_t)js[(par + i) & 1]);
+         int32_t lt = (int32_t)((uint32_t)tt + (uint32_t)dt * i + (uint32_t)jt[(par + i) & 1]);
          int si = ls >> 16, ti = lt >> 16;
          if (tk == TK_FILTER)
             texel[i] = soft_filter3_at(rgba, width, tight_axis(si, sand, ms), tight_axis(si + 1, sand, ms),
@@ -228,7 +230,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    const SoftCombineProgram *prog = (const SoftCombineProgram*)p->prog;
    const SoftTex *tex = p->tex;
    const int lerp = mode == SC_TEX_LERP_MUL_SHADE;
-   const SoftTex *tex1 = (mode == SC_GENERIC || lerp) && tk == TK_RUNTIME && prog->uses_tex ? p->tex1 : NULL;
+   const SoftTex *tex1 = (mode == SC_GENERIC || lerp) && (tk == TK_RUNTIME ? prog->uses_tex : tk != TK_NONE) ? p->tex1 : NULL;
    int lk[3] = { 0, 0, 0 };
    uint16_t *dst = t->color + y * t->width;
    uint16_t *zb  = t->depth + y * t->width;
@@ -258,6 +260,8 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
    int z_fast = z >= 0 && z < (65536LL << 16) && z_end >= 0 && z_end < (65536LL << 16);
    uint32_t z32 = (uint32_t)z, dz32 = (uint32_t)dz;
    GenericPlan plan;
+   /* Dithered sampling offsets per pixel parity, centred so their mean is half a texel. */
+   int32_t js[2] = { 0, 0 }, jt[2] = { 0, 0 };
    uint8_t v[R_COUNT * 4];
 
    if (uses_tex)
@@ -286,6 +290,13 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       }
    }
 
+   if (p->dither)
+   {
+      static const int32_t ds_[2][2] = { { 0x6000, 0xa000 }, { 0xe000, 0x2000 } };
+      static const int32_t dt_[2][2] = { { 0x2000, 0xe000 }, { 0xa000, 0x6000 } };
+      js[0] = ds_[y & 1][0]; js[1] = ds_[y & 1][1];
+      jt[0] = dt_[y & 1][0]; jt[1] = dt_[y & 1][1];
+   }
    if (lerp)
       for (ch = 0; ch < 3; ch++)
          lk[ch] = lerp_weight(p, prog->sel[0][0][2], ch);
@@ -320,7 +331,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       {
          const int32_t rgb[3] = { r, g, b }, drgb[3] = { dr, dg, db };
          quad_opaque(p, rgba, width, sand, tand, ms, mt, mode, tk, z_test, z_write, bias,
-               dst + x, zb + x, rgb, drgb, z32, dz32, s, ds, tt, dt);
+               dst + x, zb + x, rgb, drgb, z32, dz32, s, ds, tt, dt, js, jt, x & 1);
          r += 4 * dr; g += 4 * dg; b += 4 * db; a += 4 * da; f += 4 * df;
          z32 += 4 * dz32; s += 4 * ds; tt += 4 * dt;
          x += 3;
@@ -338,7 +349,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
       sh[0] = sat8(r); sh[1] = sat8(g); sh[2] = sat8(b); sh[3] = sat8(a);
       if (uses_tex)
       {
-         int si = s >> 16, ti = tt >> 16;
+         int si = (s + js[x & 1]) >> 16, ti = (tt + jt[x & 1]) >> 16;
          uint32_t texel;
          if (tk == TK_FILTER)
             texel = soft_filter3_at(rgba, width, tight_axis(si, sand, ms), tight_axis(si + 1, sand, ms),
@@ -381,7 +392,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          case SC_TEX_LERP_MUL_SHADE:
          {
             /* Generic combiner arithmetic, so results match it exactly. */
-            uint32_t texel1 = tex1 ? fetch_tex1(p, tex1, s, tt, filter)
+            uint32_t texel1 = tex1 ? fetch_tex1(p, tex1, s + js[x & 1], tt + jt[x & 1], filter)
                : (uint32_t)tx[0] | (uint32_t)tx[1] << 8 | (uint32_t)tx[2] << 16;
             for (ch = 0; ch < 3; ch++)
             {
@@ -394,7 +405,7 @@ static inline __attribute__((always_inline)) void span_mode(const SoftTarget *t,
          default:
             if (tex1)
             {
-               uint32_t texel1 = fetch_tex1(p, tex1, s, tt, filter);
+               uint32_t texel1 = fetch_tex1(p, tex1, s + js[x & 1], tt + jt[x & 1], filter);
                for (ch = 0; ch < 4; ch++)
                   v[R_TEX1 * 4 + ch] = (uint8_t)(texel1 >> (8 * ch));
             }
@@ -469,6 +480,15 @@ static inline __attribute__((always_inline)) void tight_blended(const SoftTarget
    else span_mode(t, p, tri, y, x0, x1, m, -1, 2, TK_NONE);
 }
 
+/* Tight fetch with run-time fog, alpha test and blending. */
+static inline __attribute__((always_inline)) void tight_fx(const SoftTarget *t,
+      const SoftPipe *p, const SoftTri *tri, int y, int x0, int x1, const int m, int tk)
+{
+   if (tk == TK_POINT) span_mode(t, p, tri, y, x0, x1, m, -1, 0, TK_POINT);
+   else if (tk == TK_FILTER) span_mode(t, p, tri, y, x0, x1, m, -1, 0, TK_FILTER);
+   else span_mode(t, p, tri, y, x0, x1, m, -1, 0, TK_NONE);
+}
+
 static int tight_axis_ok(int wrap, int n)
 {
    return wrap == SOFT_CLAMP || (wrap == SOFT_WRAP && !(n & (n - 1)));
@@ -483,9 +503,9 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
    const SoftTex *tex = p->tex;
    int tk = TK_RUNTIME;
    /* Opaque spans never read alpha, so the alpha mode and alpha-only texture use drop out. */
-   if (tight_enabled && nofx && prog->mode < SC_GENERIC)
+   if (tight_enabled && prog->mode != SC_GENERIC)
    {
-      if (opaque ? prog->mode == SC_SHADE : !prog->uses_tex)
+      if (simple ? prog->mode == SC_SHADE : !prog->uses_tex)
          tk = TK_NONE;
       else if (tight_axis_ok(tex->wrap_s, tex->w) && tight_axis_ok(tex->wrap_t, tex->h))
          tk = p->filter ? TK_FILTER : TK_POINT;
@@ -517,7 +537,8 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
 #endif
    /* Alpha following the colour mode gets its own loop; split alpha is chosen per pixel. */
 #define MODE(m) case m: \
-      if (tk != TK_RUNTIME && opaque) tight_opaque(t, p, tri, y, x0, x1, m, tk); \
+      if (tk != TK_RUNTIME && simple) tight_opaque(t, p, tri, y, x0, x1, m, tk); \
+      else if (tk != TK_RUNTIME && !nofx) tight_fx(t, p, tri, y, x0, x1, m, tk); \
       else if (tk != TK_RUNTIME) tight_blended(t, p, tri, y, x0, x1, m, tk); \
       else if (prog->amode == SA_SAME && simple) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 1, TK_RUNTIME); \
       else if (prog->amode == SA_SAME) span_mode(t, p, tri, y, x0, x1, m, SA_SAME, 0, TK_RUNTIME); \
@@ -531,7 +552,8 @@ void soft_span_fixed(const SoftTarget *t, const SoftPipe *p,
       MODE(SC_TEX_MUL_PRIM);
       MODE(SC_TEX_MUL_ENV);
       case SC_TEX_LERP_MUL_SHADE:
-         if (simple) span_mode(t, p, tri, y, x0, x1, SC_TEX_LERP_MUL_SHADE, SA_SHADE, 1, TK_RUNTIME);
+         if (tk != TK_RUNTIME) tight_fx(t, p, tri, y, x0, x1, SC_TEX_LERP_MUL_SHADE, tk);
+         else if (simple) span_mode(t, p, tri, y, x0, x1, SC_TEX_LERP_MUL_SHADE, SA_SHADE, 1, TK_RUNTIME);
          else span_mode(t, p, tri, y, x0, x1, SC_TEX_LERP_MUL_SHADE, SA_SHADE, 0, TK_RUNTIME);
          break;
       default:

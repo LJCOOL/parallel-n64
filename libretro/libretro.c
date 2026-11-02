@@ -1773,9 +1773,11 @@ static void gfx_set_filtering(void)
 #endif
            break;
         case GFX_GLN64:
-#ifdef HAVE_GLN64
-           /* Stub */
+#ifdef HAVE_SOFT
+           /* Soft renderer: automatic and bilinear dither, 3-point is exact, nearest drops filtering. */
+           soft_set_tex_filter(retro_filtering == 1 ? 1 : (retro_filtering == 2 ? 2 : 0));
 #endif
+           break;
         case GFX_GLIDEN64:
 #ifdef HAVE_GLIDEN64
            /* Stub */

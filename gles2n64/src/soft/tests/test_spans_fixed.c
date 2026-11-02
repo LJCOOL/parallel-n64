@@ -120,10 +120,12 @@ static void run_fixed_mode(float w_lo, float w_slope, int colour_limit, int exac
       p.blend = (int)((span / (SC_GENERIC + 1)) % (SB_KEEP + 1));
       if (tight)
       {
-         /* Unfogged, untested spans take the tight loop, opaque or blended. */
-         p.fog = 0;
-         p.alpha_test = 0;
+         /* Fogged and alpha-tested spans take the tight loop too. */
+         p.fog = (span >> 6) & 1;
+         p.alpha_test = (span >> 7) & 1;
          p.filter = (span >> 5) & 1;
+         p.dither = p.filter && (span & 1);
+         if (p.dither) p.filter = 0;
       }
       for (i = 0; i < 4; i++)
       {

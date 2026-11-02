@@ -80,6 +80,7 @@ typedef struct SoftPipe
    int fog;
    int blend;                 /* SoftBlendMode */
    int filter;                /* N64 three-point texture filtering */
+   int dither;                /* point sample with a 2x2 screen-space jitter */
 } SoftPipe;
 
 /* Edge a->b; top-left edges own their boundary pixels. */

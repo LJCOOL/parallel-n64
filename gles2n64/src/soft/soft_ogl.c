@@ -21,6 +21,13 @@
 #include "soft_mt.h"
 #include "../../../libretro/libretro_private.h"
 
+static int soft_tex_filter = 0;
+
+void soft_set_tex_filter(int mode)
+{
+   soft_tex_filter = mode;
+}
+
 static uint16_t soft_color[SOFT_WIDTH * SOFT_HEIGHT];
 static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
 static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
@@ -251,6 +258,10 @@ static void build_pipe(SoftPipe *p, bool *textured, float tex_base)
          gDP.otherMode.alphaCvgSel, gDP.otherMode.cycleType);
    p->fog = (soft_combine_flags & SC_FOGENABLED) != 0;
    p->filter = gDP.otherMode.textureFilter != G_TF_POINT && gDP.otherMode.cycleType < G_CYC_COPY;
+   /* Depth-less draws are usually HUD and text, so only depth-tested draws dither. */
+   p->dither = p->filter && soft_tex_filter == 0 && p->z_test;
+   if (soft_tex_filter == 2 || p->dither)
+      p->filter = 0;
    p->fog_color = soft_u8(gDP.fogColor.r) | (soft_u8(gDP.fogColor.g) << 8) | (soft_u8(gDP.fogColor.b) << 16);
    p->prim[0] = soft_u8(gDP.primColor.r); p->prim[1] = soft_u8(gDP.primColor.g);
    p->prim[2] = soft_u8(gDP.primColor.b); p->prim[3] = soft_u8(gDP.primColor.a);
@@ -477,6 +488,12 @@ void OGL_DrawTexturedRect(const struct TexturedRectParams *_params)
    soft_update_scissor(shift);
    soft_build_pipe(&pipe, &textured, 0.0f);
    pipe.cull = SOFT_CULL_NONE;
+   /* Rectangles carry text and HUD, so they keep the exact filter. */
+   if (pipe.dither)
+   {
+      pipe.dither = 0;
+      pipe.filter = 1;
+   }
    s0 = t0 = s1 = t1 = 0.0f;
    if (textured)
    {
