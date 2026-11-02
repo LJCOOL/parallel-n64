@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "soft_stats.h"
 #include <retro_miscellaneous.h>
 
@@ -7,6 +8,8 @@
 #include "../gDP.h"
 #include "../gSP.h"
 #include "../Hash.h"
+#include "../N64.h"
+#include "../../../Graphics/image_convert.h"
 #include "../../../Graphics/RDP/gDP_state.h"
 #include "../../../Graphics/RSP/gSP_state.h"
 #include "soft_texels.h"
@@ -261,6 +264,67 @@ static void decode_tile(void *opaque, SoftTex *tex)
    SOFT_TIME_END(SOFT_T_DECODE, t0);
 }
 
+/* Background rectangles read the image straight from RDRAM, like the GL _loadBackground. */
+static uint32_t bg_bytes(void)
+{
+   uint32_t bytes = (gSP.bgImage.width << gSP.bgImage.size >> 1) * gSP.bgImage.height;
+   if (gSP.bgImage.address >= RDRAMSize)
+      return 0;
+   return MIN(bytes, RDRAMSize - gSP.bgImage.address);
+}
+
+static void decode_bg(void *opaque, SoftTex *tex)
+{
+   const uint32_t bpl = gSP.bgImage.width << gSP.bgImage.size >> 1;
+   const uint32_t bytes = bg_bytes();
+   GetTexelFunc GetTexel = soft_load_params[gSP.bgImage.format == G_IM_FMT_CI ? G_TT_RGBA16 : G_TT_NONE]
+         [gSP.bgImage.size][gSP.bgImage.format].Get32;
+   uint8_t *src = (uint8_t*)calloc(1, bpl * gSP.bgImage.height + 8);
+   uint32_t x, y, j = 0;
+
+   (void)opaque;
+   if (src == NULL)
+   {
+      for (j = 0; j < (uint32_t)tex->w * tex->h; j++)
+         store(tex, j, 0xff000000);
+      return;
+   }
+   SOFT_TIME_BEGIN(t0);
+   UnswapCopyWrap(gfx_info.RDRAM, gSP.bgImage.address, src, 0, 0xFFFFFFFF, bytes);
+   for (y = 0; y < tex->h; y++)
+      for (x = 0; x < tex->w; x++)
+         store(tex, j++, GetTexel((uint64_t*)&src[bpl * y], x, 0, gSP.bgImage.palette));
+   free(src);
+   SOFT_TIME_END(SOFT_T_DECODE, t0);
+}
+
+static const SoftTex *bg_get(void)
+{
+   SoftTexKey key;
+   uint32_t params[4];
+
+   if (gSP.bgImage.width == 0 || gSP.bgImage.height == 0
+         || gSP.bgImage.width > 1024 || gSP.bgImage.height > 1024 || bg_bytes() == 0)
+      return NULL;
+   key.crc = Hash_Calculate(0xFFFFFFFF, &gfx_info.RDRAM[gSP.bgImage.address], bg_bytes());
+   if (gSP.bgImage.format == G_IM_FMT_CI)
+   {
+      if (gSP.bgImage.size == G_IM_SIZ_4b)
+         key.crc = Hash_Calculate(key.crc, &gDP.paletteCRC16[gSP.bgImage.palette], 4);
+      else if (gSP.bgImage.size == G_IM_SIZ_8b)
+         key.crc = Hash_Calculate(key.crc, &gDP.paletteCRC256, 4);
+   }
+   params[0] = gSP.bgImage.format; params[1] = gSP.bgImage.size;
+   params[2] = gSP.bgImage.palette; params[3] = 0xB6;
+   key.crc     = Hash_Calculate(key.crc, params, sizeof(params));
+   key.address = gSP.bgImage.address;
+   key.w       = (uint16_t)gSP.bgImage.width;
+   key.h       = (uint16_t)gSP.bgImage.height;
+   key.wrap_s  = SOFT_CLAMP;
+   key.wrap_t  = SOFT_CLAMP;
+   return soft_texcache_lookup(&key, gDP.colorImage.address, decode_bg, NULL);
+}
+
 const SoftTex *soft_texcache_get(uint32_t t)
 {
    struct DecodeCtx ctx;
@@ -268,6 +332,8 @@ const SoftTex *soft_texcache_get(uint32_t t)
 
    if (gSP.textureTile[t] == NULL)
       return NULL;
+   if (gSP.textureTile[t]->textureMode == TEXTUREMODE_BGIMAGE)
+      return bg_get();
    if (gSP.texture.tile == 7 && t == 0 && gSP.textureTile[0] == gDP.loadTile
          && gDP.loadTile->loadType == LOADTYPE_BLOCK && gSP.textureTile[0]->tmem == gSP.textureTile[1]->tmem)
       gSP.textureTile[0] = gSP.textureTile[1];
@@ -303,6 +369,14 @@ static float shift_scale(uint32_t shift)
 void soft_tex_coords(uint32_t t, SoftTexCoords *out)
 {
    struct gDPTile *tile = gSP.textureTile[t];
+   if (tile->textureMode == TEXTUREMODE_BGIMAGE)
+   {
+      out->shift_s = out->shift_t = 1.0f;
+      out->scale_s = gSP.texture.scales;
+      out->scale_t = gSP.texture.scalet;
+      out->off_s = out->off_t = 0.5f;
+      return;
+   }
    out->shift_s = shift_scale(tile->shifts);
    out->shift_t = shift_scale(tile->shiftt);
    out->scale_s = gSP.texture.scales * out->shift_s;

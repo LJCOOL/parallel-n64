@@ -545,11 +545,6 @@ void OGL_DrawDMATriangles(uint32_t _numVtx)
    soft_draw_list(NULL, _numVtx);
 }
 
-void OGL_DrawLLETriangle(uint32_t _numVtx)
-{
-   OGL.triangles.num = 0;
-}
-
 static uint16_t soft_pack565(const float *c)
 {
    int r = (int)(c[0] * 31.0f + 0.5f);
@@ -575,6 +570,52 @@ static void soft_rect_vert(SoftVert *v, float x, float y, int shift, uint16_t z,
    v->s = s;
    v->t = t;
    v->invw = 1.0f;
+}
+
+/* Draws a strip of screen-space vertices from S2DEX object and background rectangles and LLE triangles. */
+void OGL_DrawLLETriangle(uint32_t _numVtx)
+{
+   SoftPipe pipe;
+   SoftTexCoords tc;
+   SoftVert v[3];
+   bool textured;
+   int shift = soft_shift();
+   uint32_t i;
+
+   OGL.triangles.num = 0;
+   if (_numVtx < 3 || gDP.otherMode.cycleType == G_CYC_FILL)
+      return;
+   soft_update_scissor(shift);
+   soft_build_pipe(&pipe, &textured, 0.5f);
+   pipe.cull = SOFT_CULL_NONE;
+   if (textured)
+      soft_tex_coords(0, &tc);
+   for (i = 0; i < _numVtx; i++)
+   {
+      const struct SPVertex *in = &OGL.triangles.vertices[i];
+      SoftVert *out = &v[i % 3];
+      float zf = in->z * 32767.5f + 32767.5f;
+      float s = in->s, t = in->t;
+
+      if (gDP.otherMode.texturePersp == 0)
+      {
+         s *= 2.0f;
+         t *= 2.0f;
+      }
+      soft_rect_vert(out, in->x, in->y, shift,
+            (uint16_t)(zf < 0.0f ? 0.0f : (zf > 65535.0f ? 65535.0f : zf)), 0.0f, 0.0f);
+      out->r = soft_u8(in->r); out->g = soft_u8(in->g);
+      out->b = soft_u8(in->b); out->a = soft_u8(in->a);
+      if (textured)
+      {
+         out->s = s * tc.scale_s + tc.off_s;
+         out->t = t * tc.scale_t + tc.off_t;
+      }
+      if (in->w > 0.0f)
+         out->invw = 1.0f / in->w;
+      if (i >= 2)
+         soft_record_tri(&v[(i - 2) % 3], &v[(i - 1) % 3], &v[i % 3], &pipe);
+   }
 }
 
 void OGL_DrawRect(int ulx, int uly, int lrx, int lry, float *color)
