@@ -15,6 +15,7 @@
 #include "soft_texels.h"
 #include "soft_textures.h"
 #include "texcache.h"
+#include "soft_ogl.h"
 
 struct TileSizes
 {
@@ -303,6 +304,7 @@ static const SoftTex *bg_get(void)
    SoftTexKey key;
    uint32_t params[4];
 
+   soft_rdram_read(gSP.bgImage.address);
    if (gSP.bgImage.width == 0 || gSP.bgImage.height == 0
          || gSP.bgImage.width > 1024 || gSP.bgImage.height > 1024 || bg_bytes() == 0)
       return NULL;

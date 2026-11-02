@@ -26,6 +26,12 @@
 #include "../../Graphics/RDP/RDP_state.h"
 #include "../../Graphics/RSP/gSP_state.h"
 #include "Hash.h"
+#ifdef HAVE_SOFT
+#include "soft/soft_ogl.h"
+#define SOFT_RDRAM_READ() soft_rdram_read(gDP.textureImage.address)
+#else
+#define SOFT_RDRAM_READ() ((void)0)
+#endif
 
 void gln64gDPSetOtherMode( uint32_t mode0, uint32_t mode1 )
 {
@@ -492,6 +498,7 @@ void gln64gDPLoadTile(uint32_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, u
 {
     uint32_t width, height, address, bpl, bpl2, height2;
 	struct gDPLoadTileInfo *info;
+   SOFT_RDRAM_READ();
 
 	gln64gDPSetTileSize( tile, uls, ult, lrs, lrt );
 	gDP.loadTile = &gDP.tiles[tile];
@@ -609,6 +616,7 @@ void gln64gDPLoadBlock(uint32_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, 
 {
 	uint32_t bytes, address;
     struct gDPLoadTileInfo *info;
+   SOFT_RDRAM_READ();
 
 	gln64gDPSetTileSize( tile, uls, ult, lrs, dxt );
 	gDP.loadTile = &gDP.tiles[tile];
@@ -678,6 +686,7 @@ void gln64gDPLoadTLUT( uint32_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, 
    int i;
    uint32_t address;
    uint16_t count, pal, *dest, j;
+   SOFT_RDRAM_READ();
 
 	gln64gDPSetTileSize( tile, uls, ult, lrs, lrt );
 	if (gDP.tiles[tile].tmem < 256)

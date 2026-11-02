@@ -7,6 +7,7 @@
 #include "../GBI.h"
 #include "../RSP.h"
 #include "../gles2N64.h"
+#include "../N64.h"
 #include "../ShaderCombiner.h"
 #include "../../../Graphics/RDP/gDP_state.h"
 #include "../../../Graphics/RSP/gSP_state.h"
@@ -137,9 +138,136 @@ static void soft_present_to(uint32_t *front)
    SOFT_TIME_END(SOFT_T_PRESENT, t0);
 }
 
+#define SOFT_FRAME_BYTES (SOFT_WIDTH * SOFT_HEIGHT * 2)
+
+/* RDRAM address of the frame being presented, or 0 when it cannot be written back. */
+static uint32_t soft_wb_addr;
+/* This frame's on-screen colour image, and whether it has draws not yet in RDRAM. */
+static uint32_t soft_main_addr;
+static int soft_main_dirty;
+/* Offscreen colour image being drawn, its width and the rows its scissors reached. */
+static uint32_t soft_off_addr;
+static int soft_off_w, soft_off_rows;
+static uint16_t soft_save_color[SOFT_WIDTH * SOFT_HEIGHT];
+static uint16_t soft_save_depth[SOFT_WIDTH * SOFT_HEIGHT];
+
+/* Stores rows of the colour buffer as RGBA5551 with full coverage, as the RDP would. */
+static void soft_store_rdram(uint32_t addr, int w, int rows)
+{
+   uint16_t *dst = (uint16_t*)gfx_info.RDRAM;
+   uint32_t base = addr >> 1;
+   int i, n = w * rows;
+
+   for (i = 0; i < n; i++)
+   {
+      uint32_t c = soft_color[i];
+      dst[(base + i) ^ 1] = (uint16_t)((c & 0xffc0) | (c & 0x1f) << 1 | 1);
+   }
+}
+
+static void soft_load_rdram(uint32_t addr, int w, int rows)
+{
+   const uint16_t *src = (const uint16_t*)gfx_info.RDRAM;
+   uint32_t base = addr >> 1;
+   int i, n = w * rows;
+
+   for (i = 0; i < n; i++)
+   {
+      uint32_t c = src[(base + i) ^ 1];
+      uint32_t g = (c >> 6) & 0x1f;
+      soft_color[i] = (uint16_t)((c & 0xf800) | ((g << 1 | g >> 4) << 5) | ((c >> 1) & 0x1f));
+   }
+}
+
+static void soft_write_back(void)
+{
+   if (soft_wb_addr)
+      soft_store_rdram(soft_wb_addr, SOFT_WIDTH, SOFT_HEIGHT);
+}
+
+static int soft_frame_fits(uint32_t a)
+{
+   return !(a & 3) && a + SOFT_FRAME_BYTES <= RDRAMSize;
+}
+
+static void soft_capture_wb_addr(void)
+{
+   soft_wb_addr = soft_main_addr && soft_frame_fits(soft_main_addr) ? soft_main_addr : 0;
+}
+
+/* Finishes the offscreen image, stores it to RDRAM and restores the on-screen buffers. */
+static void soft_unbind(void)
+{
+   soft_flush();
+   soft_store_rdram(soft_off_addr, soft_off_w, soft_off_rows);
+   memcpy(soft_color, soft_save_color, sizeof(soft_color));
+   memcpy(soft_depth, soft_save_depth, sizeof(soft_depth));
+   soft_target_init(&soft_target, soft_color, soft_depth, SOFT_WIDTH, SOFT_HEIGHT);
+   soft_off_addr = 0;
+}
+
+/* Routes draws to the current colour image; one other than the frame's renders through RDRAM. */
+static void soft_bind(void)
+{
+   uint32_t a = gDP.colorImage.address;
+   int w = (int)gDP.colorImage.width;
+   int rows;
+
+   if (gDP.colorImage.size != G_IM_SIZ_16b || w <= 0 || w > SOFT_WIDTH || (a & 3))
+   {
+      if (soft_off_addr)
+         soft_unbind();
+      return;
+   }
+   if (!soft_main_addr && w == SOFT_WIDTH)
+      soft_main_addr = a;
+   if (a == soft_main_addr || !soft_main_addr)
+   {
+      if (soft_off_addr)
+         soft_unbind();
+      soft_main_dirty = 1;
+      return;
+   }
+   if (a == soft_off_addr && w == soft_off_w)
+      return;
+   if (soft_off_addr)
+      soft_unbind();
+
+   rows = SOFT_WIDTH * SOFT_HEIGHT / w;
+   if ((RDRAMSize - a) / (2u * w) < (uint32_t)rows)
+      rows = (int)((RDRAMSize - a) / (2u * w));
+   if (rows <= 0)
+      return;
+   soft_flush();
+   if (soft_main_dirty && soft_frame_fits(soft_main_addr))
+      soft_store_rdram(soft_main_addr, SOFT_WIDTH, SOFT_HEIGHT);
+   soft_main_dirty = 0;
+   memcpy(soft_save_color, soft_color, sizeof(soft_color));
+   memcpy(soft_save_depth, soft_depth, sizeof(soft_depth));
+   soft_load_rdram(a, w, rows);
+   soft_target_init(&soft_target, soft_color, soft_depth, w, rows);
+   soft_off_addr = a;
+   soft_off_w = w;
+   soft_off_rows = 0;
+}
+
+void soft_rdram_read(uint32_t addr)
+{
+   if (soft_wb_addr && addr - soft_wb_addr < SOFT_FRAME_BYTES)
+      soft_wait_ahead();
+   if (soft_main_dirty && !soft_off_addr && addr - soft_main_addr < SOFT_FRAME_BYTES
+         && soft_frame_fits(soft_main_addr))
+   {
+      soft_flush();
+      soft_store_rdram(soft_main_addr, SOFT_WIDTH, SOFT_HEIGHT);
+      soft_main_dirty = 0;
+   }
+}
+
 static void soft_present_back(void)
 {
    soft_present_to(soft_fronts[soft_shown ^ 1]);
+   soft_write_back();
 }
 
 /* Draws the frame on the worker while emulation runs on, showing the previous frame meanwhile. */
@@ -163,10 +291,17 @@ void soft_present(void)
 {
    static bool logged;
 
+   soft_wait_ahead();
+   if (soft_off_addr)
+      soft_unbind();
+   soft_capture_wb_addr();
+   soft_main_addr = 0;
+   soft_main_dirty = 0;
    if (!soft_async || !soft_present_ahead())
    {
       soft_flush();
       soft_present_to(soft_fronts[soft_shown]);
+      soft_write_back();
    }
    if (!logged && log_cb)
       log_cb(RETRO_LOG_INFO, "soft: first frame presented\n");
@@ -183,6 +318,8 @@ static void soft_update_scissor(int shift)
    soft_set_scissor(&soft_target,
          (int)gDP.scissor.ulx >> shift, (int)gDP.scissor.uly >> shift,
          (int)gDP.scissor.lrx >> shift, (int)gDP.scissor.lry >> shift);
+   if (soft_off_addr && soft_target.sy1 > soft_off_rows)
+      soft_off_rows = soft_target.sy1;
 }
 
 static void soft_viewport(SoftViewport *vp)
@@ -419,7 +556,7 @@ static void soft_draw_list(const uint8_t *elements, uint32_t count)
    const SoftTexCoords *tcp = NULL;
    uint32_t i;
    bool textured;
-   int shift = soft_shift();
+   int shift = (soft_bind(), soft_shift());
    bool flat = (gSP.geometryMode & G_SHADE) == 0
             || (gSP.geometryMode & G_SHADING_SMOOTH) == 0;
    SOFT_TIME_BEGIN(t0);
@@ -585,6 +722,7 @@ void OGL_DrawLLETriangle(uint32_t _numVtx)
    OGL.triangles.num = 0;
    if (_numVtx < 3 || gDP.otherMode.cycleType == G_CYC_FILL)
       return;
+   soft_bind();
    soft_update_scissor(shift);
    soft_build_pipe(&pipe, &textured, 0.5f);
    pipe.cull = SOFT_CULL_NONE;
@@ -620,7 +758,10 @@ void OGL_DrawLLETriangle(uint32_t _numVtx)
 
 void OGL_DrawRect(int ulx, int uly, int lrx, int lry, float *color)
 {
-   int shift = soft_shift();
+   int shift;
+
+   soft_bind();
+   shift = soft_shift();
 
    soft_update_scissor(shift);
    if (gDP.otherMode.cycleType == G_CYC_FILL)
@@ -659,8 +800,10 @@ void OGL_DrawTexturedRect(const struct TexturedRectParams *_params)
    bool textured;
    float s0, t0, s1, t1, zf;
    uint16_t z;
-   int shift = soft_shift();
+   int shift;
 
+   soft_bind();
+   shift = soft_shift();
    soft_update_scissor(shift);
    soft_build_pipe(&pipe, &textured, 0.0f);
    pipe.cull = SOFT_CULL_NONE;
@@ -709,6 +852,8 @@ void OGL_ClearDepthBuffer(bool _fullsize)
 
 void OGL_ClearColorBuffer(float *color)
 {
+   soft_bind();
+   soft_update_scissor(soft_shift());
    if (soft_queue_full(soft_q))
       soft_flush();
    soft_queue_clear_color(soft_q, soft_pack565(color));
@@ -716,6 +861,10 @@ void OGL_ClearColorBuffer(float *color)
 
 void soft_ogl_stop(void)
 {
+   soft_off_addr = 0;
+   soft_main_addr = 0;
+   soft_main_dirty = 0;
+   soft_wb_addr = 0;
    soft_mt_stop();
    soft_texcache_unhold();
    soft_queue_reset(soft_q);

@@ -17,6 +17,9 @@ void soft_ogl_init(void);
 /* Stops the render worker and drops any recorded, undrawn commands. */
 void soft_ogl_stop(void);
 
+/* Ensures rendered frames covering this RDRAM address are stored before it is read. */
+void soft_rdram_read(uint32_t addr);
+
 /* Publishes the finished frame for video_cb. */
 void soft_present(void);
 
