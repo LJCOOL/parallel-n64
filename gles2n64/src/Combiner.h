@@ -180,6 +180,7 @@ extern int ACEncodeD[];
 void Combiner_Init(void);
 void Combiner_Destroy(void);
 void Combiner_Set(uint64_t mux, int flags);
+int Combiner_Flags(void);
 
 void ShaderCombiner_Init(void);
 void ShaderCombiner_Destroy(void);

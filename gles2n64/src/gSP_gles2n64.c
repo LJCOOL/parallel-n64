@@ -26,6 +26,9 @@
 #include "../../Graphics/RDP/gDP_state.h"
 #include "../../Graphics/RSP/gSP_state.h"
 #include "../../Graphics/image_convert.h"
+#ifdef HAVE_SOFT
+#include "soft/soft_stats.h"
+#endif
 
 //Note: 0xC0 is used by 1080 alot, its an unknown command.
 
@@ -321,7 +324,20 @@ void gln64gSPClipVertex(uint32_t v)
    if (vtx->w < 0.01f)      vtx->clip |= CLIP_Z;
 }
 
+static void process_vertex(uint32_t v);
+
 void gln64gSPProcessVertex(uint32_t v)
+{
+#ifdef HAVE_SOFT
+   SOFT_TIME_BEGIN(t0);
+   process_vertex(v);
+   SOFT_TIME_END(SOFT_T_VERTEX, t0);
+#else
+   process_vertex(v);
+#endif
+}
+
+static void process_vertex(uint32_t v)
 {
    
    float intensity, r, g, b;

@@ -16,6 +16,9 @@ enum
    SOFT_T_BAND0,     /* caller's band replay */
    SOFT_T_BAND1,     /* worker's band replay */
    SOFT_T_WAIT,      /* caller waiting for the worker */
+   SOFT_T_VERTEX,    /* vertex load, transform and lighting */
+   SOFT_T_TRIS,      /* triangle list: clip, project, record */
+   SOFT_T_RECORD,    /* queueing and triangle setup */
    SOFT_T_COUNT
 };
 

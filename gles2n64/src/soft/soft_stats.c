@@ -374,6 +374,8 @@ void soft_stats_frame(void)
             stage_ns[SOFT_T_RASTER] / b, stage_ns[SOFT_T_PRESENT] / b);
       log_cb(RETRO_LOG_INFO, "soft: bands per busy frame: band0 %.2f band1 %.2f wait %.2f ms\n",
             stage_ns[SOFT_T_BAND0] / b, stage_ns[SOFT_T_BAND1] / b, stage_ns[SOFT_T_WAIT] / b);
+      log_cb(RETRO_LOG_INFO, "soft: dl stages per busy frame: vertex %.2f tris %.2f record %.2f ms\n",
+            stage_ns[SOFT_T_VERTEX] / b, stage_ns[SOFT_T_TRIS] / b, stage_ns[SOFT_T_RECORD] / b);
       log_cb(RETRO_LOG_INFO, "soft: span px per busy frame: fast %.0f generic %.0f\n",
             (span_px[0][0] + span_px[1][0]) / (double)busy_frames,
             (span_px[0][1] + span_px[1][1]) / (double)busy_frames);

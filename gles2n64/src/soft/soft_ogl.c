@@ -110,7 +110,11 @@ static void soft_record_tri(const SoftVert *v0, const SoftVert *v1, const SoftVe
       soft_flush();
    soft_texcache_pin(p->tex);
    soft_texcache_pin(p->tex1);
-   soft_queue_tri(soft_q, &soft_target, v0, v1, v2, p);
+   {
+      SOFT_TIME_BEGIN(t0);
+      soft_queue_tri(soft_q, &soft_target, v0, v1, v2, p);
+      SOFT_TIME_END(SOFT_T_RECORD, t0);
+   }
 }
 
 const uint32_t *soft_frame(void)
@@ -207,14 +211,47 @@ static void soft_flat_colors(struct SPVertex *v, SoftVert *out)
    out->a = (uint8_t)(v->flat_a * 255.0f);
 }
 
+static SoftCombineProgram soft_prog;
+
+/* Recently compiled combiner programs, keyed by mux and flags and replaced round robin. */
+#define SOFT_PROG_CACHE 16
+static struct
+{
+   uint64_t mux;
+   int flags;
+   SoftCombineProgram prog;
+} soft_prog_cache[SOFT_PROG_CACHE];
+static int soft_prog_cached, soft_prog_next;
+
+/* Sets soft_prog and soft_combine_flags for the current combiner, compiling only on a miss. */
 static void soft_update_combiner(void)
 {
+   uint64_t mux;
+   int flags = Combiner_Flags(), i;
+
    if (gDP.otherMode.cycleType == G_CYC_COPY)
-      Combiner_Set(EncodeCombineMode(0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0), -1);
+      mux = EncodeCombineMode(0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0, 0, 0, 0, TEXEL0);
    else if (gDP.otherMode.cycleType == G_CYC_FILL)
-      Combiner_Set(EncodeCombineMode(0, 0, 0, SHADE, 0, 0, 0, 1, 0, 0, 0, SHADE, 0, 0, 0, 1), -1);
+      mux = EncodeCombineMode(0, 0, 0, SHADE, 0, 0, 0, 1, 0, 0, 0, SHADE, 0, 0, 0, 1);
    else
-      Combiner_Set(gDP.combine.mux, -1);
+      mux = gDP.combine.mux;
+
+   for (i = 0; i < soft_prog_cached; i++)
+      if (soft_prog_cache[i].mux == mux && soft_prog_cache[i].flags == flags)
+      {
+         soft_combine_flags = flags;
+         soft_prog = soft_prog_cache[i].prog;
+         return;
+      }
+   Combiner_Set(mux, flags);
+   soft_combine_compile(&soft_dmux, (soft_combine_flags & SC_2CYCLE) != 0, &soft_prog);
+   i = soft_prog_next;
+   soft_prog_next = (soft_prog_next + 1) % SOFT_PROG_CACHE;
+   if (soft_prog_cached < SOFT_PROG_CACHE)
+      soft_prog_cached++;
+   soft_prog_cache[i].mux = mux;
+   soft_prog_cache[i].flags = flags;
+   soft_prog_cache[i].prog = soft_prog;
 }
 
 
@@ -258,8 +295,6 @@ static void soft_tex1_map(SoftPipe *p, float base)
    p->tex1_ot = soft_fix16(base - gSP.textureTile[1]->fult - (base - gSP.textureTile[0]->fult) * kt);
 }
 
-static SoftCombineProgram soft_prog;
-
 static uint8_t soft_u8(float v)
 {
    return (uint8_t)(v <= 0.0f ? 0 : (v >= 1.0f ? 255 : v * 255.0f + 0.5f));
@@ -283,7 +318,6 @@ static void build_pipe(SoftPipe *p, bool *textured, float tex_base)
       logger_set = true;
    }
    soft_update_combiner();
-   soft_combine_compile(&soft_dmux, (soft_combine_flags & SC_2CYCLE) != 0, &soft_prog);
 
    memset(p, 0, sizeof(*p));
    p->cull = soft_cull_mode();
@@ -354,53 +388,105 @@ static void soft_build_pipe(SoftPipe *p, bool *textured, float tex_base)
    SOFT_TIME_END(SOFT_T_PIPE, t0);
 }
 
+/* Projects one vertex and applies the per-draw colour, fog and texture coordinate rules. */
+static bool soft_finish_vert(struct SPVertex *v, const SoftViewport *vp, int shift, bool flat,
+      int fog, const SoftTexCoords *tc, SoftVert *out)
+{
+   if (!soft_vertex_to_screen(v, vp, shift, out))
+      return false;
+   if (flat)
+      soft_flat_colors(v, out);
+   if (fog)
+      out->fog = soft_vertex_fog(v);
+   if (tc)
+   {
+      out->s = v->s * tc->scale_s + tc->off_s;
+      out->t = v->t * tc->scale_t + tc->off_t;
+   }
+   return true;
+}
+
+/* Screen vertices shared by a draw's unclipped triangles; a stamp marks those projected this draw. */
+static SoftVert soft_proj[VERTBUFF_SIZE];
+static uint32_t soft_proj_stamp[VERTBUFF_SIZE];
+static uint32_t soft_stamp;
+
 static void soft_draw_list(const uint8_t *elements, uint32_t count)
 {
    SoftViewport vp;
    SoftPipe pipe;
    SoftTexCoords tc;
+   const SoftTexCoords *tcp = NULL;
    uint32_t i;
    bool textured;
    int shift = soft_shift();
    bool flat = (gSP.geometryMode & G_SHADE) == 0
             || (gSP.geometryMode & G_SHADING_SMOOTH) == 0;
+   SOFT_TIME_BEGIN(t0);
 
    soft_viewport(&vp);
    soft_update_scissor(shift);
    soft_build_pipe(&pipe, &textured, 0.5f);
    if (textured)
+   {
       soft_tex_coords(0, &tc);
+      tcp = &tc;
+   }
+   /* Stamp 0 never matches, so wrapping skips it. */
+   if (++soft_stamp == 0)
+   {
+      memset(soft_proj_stamp, 0, sizeof(soft_proj_stamp));
+      soft_stamp = 1;
+   }
 
    for (i = 0; i + 2 < count; i += 3)
    {
-      struct SPVertex tri[3], poly[SOFT_CLIP_MAX];
-      SoftVert sv[SOFT_CLIP_MAX];
+      struct SPVertex *in[3];
+      unsigned idx[3];
       int k, n;
 
       for (k = 0; k < 3; k++)
-         tri[k] = OGL.triangles.vertices[elements ? elements[i + k] : i + k];
-      n = soft_clip_near(tri, poly);
-
-      for (k = 0; k < n; k++)
       {
-         struct SPVertex *v = &poly[k];
-         if (!soft_vertex_to_screen(v, &vp, shift, &sv[k]))
-            break;
-         if (flat)
-            soft_flat_colors(v, &sv[k]);
-         if (pipe.fog)
-            sv[k].fog = soft_vertex_fog(v);
-         if (textured)
-         {
-            sv[k].s = v->s * tc.scale_s + tc.off_s;
-            sv[k].t = v->t * tc.scale_t + tc.off_t;
-         }
+         idx[k] = elements ? elements[i + k] : i + k;
+         in[k] = &OGL.triangles.vertices[idx[k]];
       }
-      if (k < n)
+      if (in[0]->z + in[0]->w >= 0.0f && in[1]->z + in[1]->w >= 0.0f && in[2]->z + in[2]->w >= 0.0f)
+      {
+         const SoftVert *sv[3];
+         for (k = 0; k < 3; k++)
+         {
+            unsigned j = idx[k];
+            if (soft_proj_stamp[j] != soft_stamp)
+            {
+               soft_proj_stamp[j] = soft_stamp;
+               if (!soft_finish_vert(in[k], &vp, shift, flat, pipe.fog, tcp, &soft_proj[j]))
+                  soft_proj[j].invw = 0.0f;
+            }
+            if (soft_proj[j].invw == 0.0f)
+               break;
+            sv[k] = &soft_proj[j];
+         }
+         if (k == 3)
+            soft_record_tri(sv[0], sv[1], sv[2], &pipe);
          continue;
-      for (k = 1; k + 1 < n; k++)
-         soft_record_tri(&sv[0], &sv[k], &sv[k + 1], &pipe);
+      }
+      {
+         struct SPVertex tri[3], poly[SOFT_CLIP_MAX];
+         SoftVert sv[SOFT_CLIP_MAX];
+
+         for (k = 0; k < 3; k++)
+            tri[k] = *in[k];
+         n = soft_clip_near(tri, poly);
+         for (k = 0; k < n; k++)
+            if (!soft_finish_vert(&poly[k], &vp, shift, flat, pipe.fog, tcp, &sv[k]))
+               break;
+         if (k < n)
+            continue;
+         for (k = 1; k + 1 < n; k++)
+            soft_record_tri(&sv[0], &sv[k], &sv[k + 1], &pipe);
+      }
    }
+   SOFT_TIME_END(SOFT_T_TRIS, t0);
 }
 
 void OGL_AddTriangle(int v0, int v1, int v2)
