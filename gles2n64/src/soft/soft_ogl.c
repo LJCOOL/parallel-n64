@@ -221,7 +221,7 @@ static void soft_bind(void)
    }
    if (!soft_main_addr && w == SOFT_WIDTH)
       soft_main_addr = a;
-   if (a == soft_main_addr || !soft_main_addr)
+   if (w == SOFT_WIDTH && a == soft_main_addr)
    {
       if (soft_off_addr)
          soft_unbind();
