@@ -20,6 +20,8 @@ void soft_stats_frame(void);
 
 /* Texture filtering: 0 dithered single tap, 1 N64 three-point, 2 nearest. */
 void soft_set_tex_filter(int mode);
+/* Draws each frame on the second core during the next one's emulation, adding a frame of latency. */
+void soft_set_async(int on);
 
 #ifdef __cplusplus
 }

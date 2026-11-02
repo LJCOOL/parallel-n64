@@ -2695,6 +2695,13 @@ void update_variables(bool startup)
    }
    CFG_HLE_AUD = 0; /* There is no HLE audio code in libretro audio plugin. */
 
+#ifdef HAVE_SOFT
+   var.key = "parallel-n64-soft-ahead";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      soft_set_async(strcmp(var.value, "disabled") != 0);
+#endif
+
    var.key = "parallel-n64-filtering";
    var.value = NULL;
 

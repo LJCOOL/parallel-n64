@@ -22,17 +22,26 @@
 #include "../../../libretro/libretro_private.h"
 
 static int soft_tex_filter = 0;
+static int soft_async = 1;
 
 void soft_set_tex_filter(int mode)
 {
    soft_tex_filter = mode;
 }
 
+void soft_set_async(int on)
+{
+   soft_async = on;
+}
+
 static uint16_t soft_color[SOFT_WIDTH * SOFT_HEIGHT];
 static uint16_t soft_depth[SOFT_WIDTH * SOFT_HEIGHT];
-static uint32_t soft_front[SOFT_WIDTH * SOFT_HEIGHT];
+/* The worker presents into one front buffer while the frontend shows the other. */
+static uint32_t soft_fronts[2][SOFT_WIDTH * SOFT_HEIGHT];
+static int soft_shown;
 static SoftTarget soft_target;
-static SoftQueue soft_queue;
+static SoftQueue soft_queues[2];
+static SoftQueue *soft_q = &soft_queues[0];
 static const SoftTex *soft_current_tex[2];
 static const struct gDPTile *soft_current_tile[2];
 
@@ -40,32 +49,40 @@ static const struct gDPTile *soft_current_tile[2];
 
 void soft_ogl_init(void)
 {
+   soft_mt_stop();
    memset(soft_color, 0, sizeof(soft_color));
-   memset(soft_front, 0, sizeof(soft_front));
+   memset(soft_fronts, 0, sizeof(soft_fronts));
    memset(soft_depth, 0xff, sizeof(soft_depth));
    soft_target_init(&soft_target, soft_color, soft_depth, SOFT_WIDTH, SOFT_HEIGHT);
-   soft_queue_reset(&soft_queue);
+   soft_queue_reset(soft_q);
    soft_texcache_init(SOFT_TEXCACHE_BUDGET);
    soft_current_tex[0] = soft_current_tex[1] = NULL;
-   soft_mt_stop();
    if (log_cb)
       log_cb(RETRO_LOG_INFO, "soft: render threads %d\n", soft_mt_start() ? 2 : 1);
    else
       soft_mt_start();
 }
 
+/* Finishes the frame drawing ahead and releases its textures. */
+static void soft_wait_ahead(void)
+{
+   soft_mt_wait();
+   soft_texcache_unhold();
+}
+
 /* Draws every recorded command on both cores, then releases their textures. */
 static void soft_flush(void)
 {
-   if (!soft_queue.count)
+   soft_wait_ahead();
+   if (!soft_q->count)
       return;
    {
       SOFT_TIME_BEGIN(t0);
-      soft_mt_replay(&soft_queue, &soft_target);
+      soft_mt_replay(soft_q, &soft_target);
       SOFT_TIME_END(SOFT_T_RASTER, t0);
    }
    soft_texcache_unpin_all();
-   soft_queue_reset(&soft_queue);
+   soft_queue_reset(soft_q);
 }
 
 static SoftCombineFold soft_fold;
@@ -89,22 +106,21 @@ static void soft_record_tri(const SoftVert *v0, const SoftVert *v1, const SoftVe
       v0 = &f[0]; v1 = &f[1]; v2 = &f[2];
    }
    /* Flushing unpins textures, so pin this one again after any flush. */
-   if (soft_queue_full(&soft_queue) || soft_texcache_over_budget())
+   if (soft_queue_full(soft_q) || soft_texcache_over_budget())
       soft_flush();
    soft_texcache_pin(p->tex);
    soft_texcache_pin(p->tex1);
-   soft_queue_tri(&soft_queue, &soft_target, v0, v1, v2, p);
+   soft_queue_tri(soft_q, &soft_target, v0, v1, v2, p);
 }
 
 const uint32_t *soft_frame(void)
 {
-   return soft_front;
+   return soft_fronts[soft_shown];
 }
 
 /* The core declares XRGB8888 before the renderer is chosen, so present widens RGB565. */
-void soft_present(void)
+static void soft_present_to(uint32_t *front)
 {
-   static bool logged;
    int i;
    SOFT_TIME_BEGIN(t0);
 
@@ -112,9 +128,42 @@ void soft_present(void)
    {
       uint32_t c = soft_color[i];
       uint32_t r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f;
-      soft_front[i] = ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
+      front[i] = ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
    }
    SOFT_TIME_END(SOFT_T_PRESENT, t0);
+}
+
+static void soft_present_back(void)
+{
+   soft_present_to(soft_fronts[soft_shown ^ 1]);
+}
+
+/* Draws the frame on the worker while emulation runs on, showing the previous frame meanwhile. */
+static int soft_present_ahead(void)
+{
+   soft_wait_ahead();
+   soft_shown ^= 1;
+   soft_texcache_hold();
+   if (!soft_mt_async(soft_q, &soft_target, soft_present_back))
+   {
+      soft_texcache_unhold();
+      soft_shown ^= 1;
+      return 0;
+   }
+   soft_q = soft_q == &soft_queues[0] ? &soft_queues[1] : &soft_queues[0];
+   soft_queue_reset(soft_q);
+   return 1;
+}
+
+void soft_present(void)
+{
+   static bool logged;
+
+   if (!soft_async || !soft_present_ahead())
+   {
+      soft_flush();
+      soft_present_to(soft_fronts[soft_shown]);
+   }
    if (!logged && log_cb)
       log_cb(RETRO_LOG_INFO, "soft: first frame presented\n");
    logged = true;
@@ -425,9 +474,9 @@ static uint16_t soft_pack565(const float *c)
 
 static void soft_fill(int x0, int y0, int x1, int y1, uint16_t c)
 {
-   if (soft_queue_full(&soft_queue))
+   if (soft_queue_full(soft_q))
       soft_flush();
-   soft_queue_fill(&soft_queue, &soft_target, x0, y0, x1, y1, c);
+   soft_queue_fill(soft_q, &soft_target, x0, y0, x1, y1, c);
 }
 
 static void soft_rect_vert(SoftVert *v, float x, float y, int shift, uint16_t z, float s, float t)
@@ -526,22 +575,23 @@ void OGL_DrawTexturedRect(const struct TexturedRectParams *_params)
 
 void OGL_ClearDepthBuffer(bool _fullsize)
 {
-   if (soft_queue_full(&soft_queue))
+   if (soft_queue_full(soft_q))
       soft_flush();
-   soft_queue_clear_depth(&soft_queue);
+   soft_queue_clear_depth(soft_q);
 }
 
 void OGL_ClearColorBuffer(float *color)
 {
-   if (soft_queue_full(&soft_queue))
+   if (soft_queue_full(soft_q))
       soft_flush();
-   soft_queue_clear_color(&soft_queue, soft_pack565(color));
+   soft_queue_clear_color(soft_q, soft_pack565(color));
 }
 
 void soft_ogl_stop(void)
 {
    soft_mt_stop();
-   soft_queue_reset(&soft_queue);
+   soft_texcache_unhold();
+   soft_queue_reset(soft_q);
    soft_texcache_release();
    soft_current_tex[0] = soft_current_tex[1] = NULL;
 }
@@ -552,7 +602,6 @@ void OGL_SwapBuffers(void)
 
    if (renderCallback)
       (*renderCallback)();
-   soft_flush();
    soft_present();
    retro_return(true);
 

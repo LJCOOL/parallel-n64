@@ -17,6 +17,9 @@ static int running, quit;
 static unsigned gen, done_gen;
 static const SoftQueue *job_q;
 static SoftTarget *job_t;
+static int job_band;
+static void (*job_after)(void);
+static unsigned async_gen;
 
 static void *worker_main(void *arg)
 {
@@ -27,6 +30,8 @@ static void *worker_main(void *arg)
    {
       const SoftQueue *q;
       SoftTarget *t;
+      int band;
+      void (*after)(void);
 
       pthread_mutex_lock(&lock);
       while (gen == seen && !quit)
@@ -39,11 +44,15 @@ static void *worker_main(void *arg)
       seen = gen;
       q = job_q;
       t = job_t;
+      band = job_band;
+      after = job_after;
       pthread_mutex_unlock(&lock);
 
       {
          SOFT_TIME_BEGIN(t0);
-         soft_queue_replay(q, t, 1);
+         soft_queue_replay(q, t, band);
+         if (after)
+            after();
          SOFT_TIME_END(SOFT_T_BAND1, t0);
       }
 
@@ -65,7 +74,7 @@ int soft_mt_start(void)
    if (running)
       return 1;
    quit = 0;
-   gen = done_gen = 0;
+   gen = done_gen = async_gen = 0;
    if (pthread_create(&worker, NULL, worker_main, NULL) != 0)
       return 0;
 #ifdef __linux__
@@ -90,6 +99,7 @@ void soft_mt_stop(void)
 {
    if (!running)
       return;
+   soft_mt_wait();
    pthread_mutex_lock(&lock);
    quit = 1;
    pthread_cond_signal(&start_cv);
@@ -104,6 +114,47 @@ void soft_mt_stop(void)
    running = 0;
 }
 
+static unsigned post(const SoftQueue *q, SoftTarget *t, int band, void (*after)(void))
+{
+   unsigned g;
+   pthread_mutex_lock(&lock);
+   job_q = q;
+   job_t = t;
+   job_band = band;
+   job_after = after;
+   g = ++gen;
+   pthread_cond_signal(&start_cv);
+   pthread_mutex_unlock(&lock);
+   return g;
+}
+
+static void wait_for(unsigned g)
+{
+   SOFT_TIME_BEGIN(t1);
+   pthread_mutex_lock(&lock);
+   while (done_gen != g)
+      pthread_cond_wait(&done_cv, &lock);
+   pthread_mutex_unlock(&lock);
+   SOFT_TIME_END(SOFT_T_WAIT, t1);
+}
+
+int soft_mt_async(const SoftQueue *q, SoftTarget *t, void (*after)(void))
+{
+   if (!running)
+      return 0;
+   soft_mt_wait();
+   async_gen = post(q, t, -1, after);
+   return 1;
+}
+
+void soft_mt_wait(void)
+{
+   if (!async_gen)
+      return;
+   wait_for(async_gen);
+   async_gen = 0;
+}
+
 void soft_mt_replay(const SoftQueue *q, SoftTarget *t)
 {
    unsigned g;
@@ -114,24 +165,12 @@ void soft_mt_replay(const SoftQueue *q, SoftTarget *t)
       soft_queue_replay(q, t, 1);
       return;
    }
-   pthread_mutex_lock(&lock);
-   job_q = q;
-   job_t = t;
-   g = ++gen;
-   pthread_cond_signal(&start_cv);
-   pthread_mutex_unlock(&lock);
-
+   soft_mt_wait();
+   g = post(q, t, 1, NULL);
    {
       SOFT_TIME_BEGIN(t0);
       soft_queue_replay(q, t, 0);
       SOFT_TIME_END(SOFT_T_BAND0, t0);
    }
-   {
-      SOFT_TIME_BEGIN(t1);
-      pthread_mutex_lock(&lock);
-      while (done_gen != g)
-         pthread_cond_wait(&done_cv, &lock);
-      pthread_mutex_unlock(&lock);
-      SOFT_TIME_END(SOFT_T_WAIT, t1);
-   }
+   wait_for(g);
 }

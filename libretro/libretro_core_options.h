@@ -1097,6 +1097,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "automatic"
     },
     {
+        CORE_NAME "-soft-ahead",
+        "(Soft) Draw Ahead",
+        "Draw Ahead",
+        "Draws each frame on the second core while the next is emulated. Smoother, one frame more latency.",
+        NULL,
+        NULL,
+        {
+            { "enabled", NULL },
+            { "disabled", NULL },
+            { NULL, NULL },
+        },
+        "enabled"
+    },
+    {
         CORE_NAME "-dithering",
         "(Angrylion) Dithering",
         "Dithering",

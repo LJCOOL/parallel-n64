@@ -11,7 +11,7 @@ typedef struct Entry
    SoftTex tex;
    SoftTexKey key;
    size_t bytes;
-   int pinned;                    /* used by commands not yet drawn */
+   int pinned;                    /* bit 0: recording queue, bit 1: queue drawing ahead */
    struct Entry *newer, *older;   /* LRU list, newest at head */
    struct Entry *next;            /* hash chain */
 } Entry;
@@ -85,7 +85,9 @@ void soft_texcache_init(size_t budget_bytes)
 
 void soft_texcache_release(void)
 {
-   soft_texcache_unpin_all();
+   Entry *e;
+   for (e = lru_head; e; e = e->older)
+      e->pinned = 0;
    while (lru_tail)
       evict(lru_tail);
 }
@@ -94,14 +96,28 @@ void soft_texcache_unpin_all(void)
 {
    Entry *e;
    for (e = lru_head; e; e = e->older)
-      e->pinned = 0;
+      e->pinned &= ~1;
+}
+
+void soft_texcache_hold(void)
+{
+   Entry *e;
+   for (e = lru_head; e; e = e->older)
+      e->pinned = (e->pinned & 1) << 1;
+}
+
+void soft_texcache_unhold(void)
+{
+   Entry *e;
+   for (e = lru_head; e; e = e->older)
+      e->pinned &= ~2;
 }
 
 void soft_texcache_pin(const SoftTex *tex)
 {
    /* Cached textures are the first member of their Entry. */
    if (tex && tex != &dummy)
-      ((Entry*)tex)->pinned = 1;
+      ((Entry*)tex)->pinned |= 1;
 }
 
 int soft_texcache_over_budget(void)
@@ -140,7 +156,7 @@ const SoftTex *soft_texcache_lookup(const SoftTexKey *key, uint32_t color_image_
       {
          lru_unlink(e);
          lru_push(e);
-         e->pinned = 1;
+         e->pinned |= 1;
          return &e->tex;
       }
    }
