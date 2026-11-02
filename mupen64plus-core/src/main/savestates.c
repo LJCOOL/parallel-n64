@@ -97,6 +97,33 @@ static uint64_t savestates_getdata(unsigned char **buff, size_t size)
 #define PUTDATA(buff, type, value) \
     do { type x = value; PUTARRAY(&x, buff, type, 1); } while(0)
 
+#define SPARSE_CHUNK 4096
+
+static int chunk_is_zero(const unsigned char *p, size_t n)
+{
+   size_t i;
+   for (i = 0; i < n; i++)
+      if (p[i])
+         return 0;
+   return 1;
+}
+
+/* Like PUTARRAY for 4-byte words, but leaves zero chunks unwritten so a fresh mapped buffer stays uncommitted. */
+static void put_words_sparse(unsigned char **buff, const void *src, size_t count)
+{
+   const unsigned char *s = (const unsigned char*)src;
+   size_t bytes = count * 4, off, n;
+   for (off = 0; off < bytes; off += n)
+   {
+      n = bytes - off < SPARSE_CHUNK ? bytes - off : SPARSE_CHUNK;
+      if (chunk_is_zero(s + off, n) && chunk_is_zero(*buff + off, n))
+         continue;
+      memcpy(*buff + off, s + off, n);
+      to_little_endian_buffer(*buff + off, 4, n / 4);
+   }
+   *buff += bytes;
+}
+
 int savestates_load_m64p(const unsigned char *data, size_t size)
 {
    char queue[1024];
@@ -679,7 +706,7 @@ int savestates_save_m64p(unsigned char *data, size_t size)
    PUTDATA(curr, uint32_t, g_dev.dp.dps_regs[DPS_BUFTEST_ADDR_REG]);
    PUTDATA(curr, uint32_t, g_dev.dp.dps_regs[DPS_BUFTEST_DATA_REG]);
 
-   PUTARRAY(g_dev.rdram.dram, curr, uint32_t, RDRAM_MAX_SIZE/4);
+   put_words_sparse(&curr, g_dev.rdram.dram, RDRAM_MAX_SIZE/4);
    PUTARRAY(g_dev.sp.mem, curr, uint32_t, SP_MEM_SIZE/4);
    PUTARRAY(g_dev.pif.ram, curr, uint8_t, PIF_RAM_SIZE);
 
@@ -690,8 +717,8 @@ int savestates_save_m64p(unsigned char *data, size_t size)
    PUTDATA(curr, int, g_dev.cart.flashram.mode);
    PUTDATA(curr, unsigned long long, g_dev.cart.flashram.status);
 
-   PUTARRAY(g_dev.r4300.cp0.tlb.LUT_r, curr, unsigned int, 0x100000);
-   PUTARRAY(g_dev.r4300.cp0.tlb.LUT_w, curr, unsigned int, 0x100000);
+   put_words_sparse(&curr, g_dev.r4300.cp0.tlb.LUT_r, 0x100000);
+   put_words_sparse(&curr, g_dev.r4300.cp0.tlb.LUT_w, 0x100000);
 
    PUTDATA(curr, unsigned int, *r4300_llbit(&g_dev.r4300));
    PUTARRAY(r4300_regs(&g_dev.r4300), curr, int64_t, 32);
