@@ -157,7 +157,8 @@ uint32_t CountPerOp = 0;
  * tlb_speed_hacks). Read at startup; applied at dynarec init and on
  * savestate load. */
 int goldeneye_tlb_hack = 1;
-uint32_t CountPerOpDenomPot = 0;
+/* Halves each ROM's cycles per instruction, closer to the real VR4300's throughput. */
+uint32_t CountPerOpDenomPot = 1;
 uint32_t ForceDisableExtraMem = 0;
 uint32_t EnableThreadedRenderer = 0;
 char* retro_dd_path_img = NULL;
