@@ -874,6 +874,8 @@ static void dd_staged_name(char* out, size_t out_len, const char* dir,
             dir, slash, (unsigned long long)h);
 }
 
+static void rom_md5_store(void);
+
 static bool emu_step_load_data()
 {
    const char *dir;
@@ -903,6 +905,7 @@ static bool emu_step_load_data()
             log_cb(RETRO_LOG_ERROR, "mupen64plus: Failed to load ROM\n");
          goto load_fail;
       }
+      rom_md5_store();
 
 #if defined(HAVE_PARALLEL)
       /* The per-game override is only known once the ROM header has been
@@ -3540,6 +3543,69 @@ done:
    return ret;
 }
 
+/* <save dir>/romcache/<key>.md5 remembers a dump's MD5 by path, size and mtime,
+ * so a mapped cartridge is not read in full just to hash it. */
+static char rom_md5_sidecar[1100];
+
+static void rom_md5_lookup(const char* path)
+{
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+   const char* save_dir = NULL;
+   struct stat st;
+   uint64_t    h = 0xcbf29ce484222325ull;
+   const char* c;
+   char        md5[33];
+   FILE*       fp;
+
+   rom_md5_sidecar[0] = '\0';
+   if (!environ_cb || !environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_dir)
+         || !save_dir || stat(path, &st) != 0)
+      return;
+   for (c = path; *c; c++)
+      h = (h ^ (uint8_t)*c) * 0x100000001b3ull;
+   h = (h ^ (uint64_t)st.st_size) * 0x100000001b3ull;
+   h = (h ^ (uint64_t)st.st_mtime) * 0x100000001b3ull;
+   snprintf(rom_md5_sidecar, sizeof(rom_md5_sidecar), "%s/romcache/%016llx.md5",
+         save_dir, (unsigned long long)h);
+   if ((fp = fopen(rom_md5_sidecar, "rb")))
+   {
+      if (fread(md5, 1, 32, fp) == 32)
+      {
+         md5[32] = '\0';
+         memcpy(g_rom_md5_hint, md5, sizeof(md5));
+         rom_md5_sidecar[0] = '\0';
+      }
+      fclose(fp);
+   }
+#else
+   (void)path;
+#endif
+}
+
+static void rom_md5_store(void)
+{
+#if !defined(_WIN32) && !defined(HAVE_LIBNX)
+   char  dir[1100];
+   char* slash;
+   FILE* fp;
+
+   if (!rom_md5_sidecar[0] || strlen(ROM_SETTINGS.MD5) != 32)
+      return;
+   snprintf(dir, sizeof(dir), "%s", rom_md5_sidecar);
+   if ((slash = strrchr(dir, '/')))
+   {
+      *slash = '\0';
+      mkdir(dir, 0755);
+   }
+   if ((fp = fopen(rom_md5_sidecar, "wb")))
+   {
+      fwrite(ROM_SETTINGS.MD5, 1, 32, fp);
+      fclose(fp);
+   }
+   rom_md5_sidecar[0] = '\0';
+#endif
+}
+
 /* Maps a native-order (z64) dump over the cartridge memory, keeping it reclaimable page cache. */
 static bool map_cart_file(const char* path, size_t size)
 {
@@ -3646,7 +3712,11 @@ static bool load_cart_in_place(const char* path, uint8_t** out, size_t* out_size
    if (CoreStartup(FRONTEND_API_VERSION, ".", ".", "Core", n64DebugCallback, 0, 0))
       goto done;
    dst = (uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM);
-   if (!(magic == 0x40123780 && map_cart_file(path, (size_t)size)))
+   g_rom_md5_hint[0]  = '\0';
+   rom_md5_sidecar[0] = '\0';
+   if (magic == 0x40123780 && map_cart_file(path, (size_t)size))
+      rom_md5_lookup(path);
+   else
    {
       memcpy(dst, head, sizeof(head));
       if (filestream_read(fp, dst + sizeof(head), size - (int64_t)sizeof(head))

@@ -63,6 +63,8 @@ static _romdatabase g_romdatabase;
 
 /* Global loaded rom size. */
 int g_rom_size = 0;
+/* Hex MD5 of the next ROM when the frontend already knows it; empty means hash. */
+char g_rom_md5_hint[33];
 
 m64p_rom_header   ROM_HEADER;
 rom_params        ROM_PARAMS;
@@ -177,9 +179,13 @@ m64p_error open_rom(const unsigned char* romimage, unsigned int size)
     memcpy(&ROM_HEADER, (uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM), sizeof(m64p_rom_header));
 
     /* Calculate MD5 hash  */
-    md5_init(&state);
-    md5_append(&state, (const md5_byte_t*)((uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM)), g_rom_size);
-    md5_finish(&state, digest);
+    if (!(g_rom_md5_hint[0] && parse_hex(g_rom_md5_hint, digest, 16)))
+    {
+        md5_init(&state);
+        md5_append(&state, (const md5_byte_t*)((uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM)), g_rom_size);
+        md5_finish(&state, digest);
+    }
+    g_rom_md5_hint[0] = '\0';
     for ( i = 0; i < 16; ++i )
         sprintf(buffer+i*2, "%02X", digest[i]);
     buffer[32] = '\0';

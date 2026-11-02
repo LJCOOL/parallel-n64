@@ -45,6 +45,7 @@ m64p_error open_disk(void);
 m64p_error close_disk(void);
 
 extern int g_rom_size;
+extern char g_rom_md5_hint[33];
 
 typedef struct _rom_params
 {
